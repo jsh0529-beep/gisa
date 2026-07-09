@@ -136,10 +136,18 @@
   .output-head{display:flex;align-items:center;gap:8px;margin-bottom:10px}
   .output-head .lab{font-family:var(--mono);font-size:11px;font-weight:600;color:var(--ink-soft)}
   .article{
-    font-family:var(--serif);font-size:15px;line-height:1.85;white-space:pre-wrap;
-    background:#FCFCFA;border:1px solid var(--line);border-radius:8px;padding:22px 24px;
+    font-family:var(--serif);font-size:15px;line-height:1.65;
+    background:#FCFCFA;border:1px solid var(--line);border-radius:8px;padding:20px 22px;
     letter-spacing:-0.1px;
   }
+  .article p{margin:0 0 10px}
+  .article p:last-child{margin-bottom:0}
+  .cands{border:1px dashed var(--line);border-radius:8px;padding:10px 14px;margin-bottom:10px;background:#F7F9FA}
+  .cands::before{content:"제목 후보 — 클릭하면 복사";display:block;font-family:var(--mono);font-size:10px;color:var(--ink-soft);margin-bottom:6px}
+  .cand{font-size:14px;font-weight:700;padding:5px 8px;border-radius:5px;cursor:pointer;line-height:1.4}
+  .cand:hover{background:var(--hot-bg)}
+  .cand.done{background:#E4F3EB;color:var(--ok)}
+  .srcline{font-family:var(--mono);font-size:11px;color:var(--ink-soft);margin-top:8px;line-height:1.5}
   .err{background:var(--hot-bg);border:1px solid #F2C2BF;color:#8E1B15;
     padding:10px 14px;border-radius:6px;font-size:13px;margin-top:10px;line-height:1.5}
   .note{font-size:11px;color:var(--ink-soft);margin-top:10px;line-height:1.6}
@@ -227,11 +235,13 @@
       <div class="output" id="output">
         <div class="output-head">
           <span class="lab">DRAFT — 팩트 기반 재구성</span>
-          <button class="btn ghost" style="margin-left:auto;padding:5px 12px;font-size:12px" onclick="copyArticle()">복사</button>
+          <button class="btn ghost" style="margin-left:auto;padding:5px 12px;font-size:12px" onclick="copyArticle()">기사 복사</button>
           <span class="copied" id="copied"></span>
         </div>
+        <div class="cands" id="titleCands" style="display:none"></div>
         <div class="article" id="articleBody"></div>
-        <p class="note">※ 원문 문장을 바꿔 쓰는 방식이 아니라, 웹에서 확인된 팩트로 리드·구조를 새로 짠 초고입니다. 수치·발언·일시는 송고 전 반드시 원출처 대조 확인하세요.</p>
+        <div class="srcline" id="srcLine" style="display:none"></div>
+        <p class="note">※ 복사 버튼은 기사 본문만 담습니다(제목 후보·출처 제외, 빈 줄 없음). 제목 후보는 클릭하면 개별 복사됩니다. 수치·발언·일시는 송고 전 반드시 원출처 대조 확인하세요.</p>
       </div>
     </div>
   </section>
@@ -239,8 +249,8 @@
 
 <script>
 let currentTab = 'naver';
-let articles = [];
-let selected = null;
+const tabData = { naver:{articles:[], stamp:""}, google:{articles:[], stamp:""} };
+let selected = null, selectedTab = null, selectedIndex = -1;
 
 /* ---------- API 키 관리 (이 브라우저에만 저장) ---------- */
 function getKey(){
@@ -316,8 +326,17 @@ function switchTab(tab){
   currentTab = tab;
   document.getElementById('tabNaver').classList.toggle('on', tab==='naver');
   document.getElementById('tabGoogle').classList.toggle('on', tab==='google');
-  document.getElementById('list').innerHTML =
-    '<li class="empty"><b>이슈 불러오기</b>를 누르면 '+(tab==='naver'?'네이버':'구글')+' 기준 화제 기사를 수집합니다.</li>';
+  const d = tabData[tab];
+  if(d.articles.length){
+    renderList();
+    document.getElementById('stamp').textContent = d.stamp;
+    document.getElementById('loadStatus').textContent = d.articles.length+"건";
+  }else{
+    document.getElementById('list').innerHTML =
+      '<li class="empty"><b>이슈 불러오기</b>를 누르면 '+(tab==='naver'?'네이버':'구글')+' 기준 화제 기사를 수집합니다.</li>';
+    document.getElementById('stamp').textContent = "—";
+    document.getElementById('loadStatus').textContent = "";
+  }
 }
 
 async function loadTrending(){
@@ -329,30 +348,37 @@ async function loadTrending(){
   list.innerHTML = '<li class="empty"><div class="loading" style="justify-content:center"><div class="spinner"></div>화제 기사를 수집하고 있습니다… (20~40초)</div></li>';
 
   const jsonSpec = '조사가 끝나면 반드시 JSON 배열만 출력하라. 코드블록, 설명, 서두 문장 절대 금지. ' +
-    '[{"title":"기사 제목","outlet":"매체명","time":"발행 시각(예: 2시간 전)","url":"기사 주소","summary":"한 줄 요약(35자 이내)","category":"정치|경제|사회|국제|연예|스포츠|IT"}] 정확히 10개, 화제성 높은 순.';
+    '[{"title":"기사 제목","outlet":"매체명","time":"발행 시각(예: 2시간 전)","url":"기사 주소","summary":"한 줄 요약(35자 이내)","category":"정치|경제|사회|국제|연예|스포츠|IT","potential":"높음|중간"}] 정확히 10개, 최신성과 조회수 잠재력을 함께 반영해 정렬. potential은 조회수 10만 이상 갈 가능성 판단.';
 
   const source = currentTab==='naver'
-    ? "네이버 뉴스에 노출 중인 주요·속보 기사"
-    : "구글 뉴스와 구글 트렌드 기준 화제 기사";
+    ? "네이버 뉴스·네이버 픽에서 조회수가 폭발할 잠재력이 있는 이슈. 선별 기준: (1)대중의 감정 반응(분노·공감·놀라움)을 강하게 유발 (2)찬반 논쟁이 붙는 사안 (3)유명인·정치인 발언과 논란 (4)돈·부동산·건강 등 생활 직결 이슈 (5)사건사고 중 파장이 큰 것. 단순 행정 발표나 밋밋한 동정 기사는 제외"
+    : "구글 뉴스와 구글 트렌드 기준 검색량 급상승 화제 기사";
+
+  const now0 = new Date();
+  const nowStr = now0.getFullYear()+"년 "+(now0.getMonth()+1)+"월 "+now0.getDate()+"일 "+now0.getHours()+"시 "+now0.getMinutes()+"분";
 
   const body = {
     system: "너는 뉴스 와이어 큐레이터다. 웹 검색으로 조사한 뒤, 최종 답변은 JSON 배열만 출력한다.",
     max_tokens: 2500,
     messages:[{role:"user",content:
-      "웹 검색으로 지금 한국에서 화제성이 급상승 중인 뉴스를 조사하라. 기준: " + source + ". " +
-      "'한국 오늘 주요 뉴스 속보' 등으로 2~3회 검색해 종합하고, 같은 주제 중복은 제거하라. " + jsonSpec
+      "현재 시각은 " + nowStr + "이다. 웹 검색으로 '지금 이 시각' 한국에서 화제인 최신 뉴스를 조사하라. 기준: " + source + ". " +
+      "핵심 조건: 반드시 최근 6시간 이내(늦어도 오늘) 발행된 기사만 선별하라. 발행 시각을 확인해 어제나 그 이전 기사, 이미 소비가 끝난 이슈는 제외하라. 최신성과 화제성을 동시에 만족해야 한다. " +
+      "'속보', '오늘 주요 뉴스' 등으로 2~3회 검색해 종합하고, 같은 주제 중복은 제거하라. " + jsonSpec
     }],
     tools:[{type:"web_search_20250305",name:"web_search"}]
   };
 
   try{
     const data = await callClaude(body);
-    articles = parseJsonArray(extractText(data));
-    renderList();
+    const parsed = parseJsonArray(extractText(data));
     const now = new Date();
-    document.getElementById('stamp').textContent =
-      now.getHours().toString().padStart(2,'0')+":"+now.getMinutes().toString().padStart(2,'0')+" 기준";
-    status.textContent = articles.length+"건";
+    const stamp = now.getHours().toString().padStart(2,'0')+":"+now.getMinutes().toString().padStart(2,'0')+" 기준";
+    tabData[currentTab].articles = parsed;
+    tabData[currentTab].stamp = stamp;
+    if(selectedTab === currentTab) selectedIndex = -1; // 목록이 바뀌었으므로 하이라이트 해제(선택 기사 자체는 유지)
+    renderList();
+    document.getElementById('stamp').textContent = stamp;
+    status.textContent = parsed.length+"건";
   }catch(err){
     console.error(err);
     list.innerHTML = '<li class="empty">수집에 실패했습니다.<br><span style="font-size:11px">'+err.message+'</span></li>';
@@ -365,17 +391,20 @@ async function loadTrending(){
 function renderList(){
   const list = document.getElementById('list');
   list.innerHTML = "";
-  articles.forEach((a,i)=>{
+  tabData[currentTab].articles.forEach((a,i)=>{
     const li = document.createElement('li');
-    li.className = 'item';
+    li.className = 'item' + (selectedTab===currentTab && selectedIndex===i ? ' sel' : '');
     li.onclick = ()=>selectArticle(i);
     li.innerHTML =
       '<div class="rank">'+String(i+1).padStart(2,'0')+'</div>'+
       '<div><div class="t"></div>'+
-      '<div class="m"><span class="cat"></span><span class="outlet"></span><span class="time"></span></div>'+
+      '<div class="m"><span class="cat"></span><span class="pot"></span><span class="outlet"></span><span class="time"></span></div>'+
       '<div class="s"></div></div>';
     li.querySelector('.t').textContent = a.title||"";
     li.querySelector('.cat').textContent = a.category||"뉴스";
+    const pot = li.querySelector('.pot');
+    if(a.potential==="높음"){ pot.textContent = "⚡ 10만+ 유력"; pot.style.color = "var(--hot)"; pot.style.fontWeight = "600"; }
+    else if(a.potential){ pot.textContent = "잠재력 "+a.potential; }
     li.querySelector('.outlet').textContent = a.outlet||"";
     li.querySelector('.time').textContent = a.time||"";
     li.querySelector('.s').textContent = a.summary||"";
@@ -384,7 +413,9 @@ function renderList(){
 }
 
 function selectArticle(i){
-  selected = articles[i];
+  selected = tabData[currentTab].articles[i];
+  selectedTab = currentTab;
+  selectedIndex = i;
   document.querySelectorAll('.item').forEach((el,idx)=>el.classList.toggle('sel', idx===i));
   document.getElementById('noSel').style.display = 'none';
   const box = document.getElementById('selbox');
@@ -417,13 +448,28 @@ async function writeArticle(){
   const extra = document.getElementById('extraFacts').value.trim();
 
   const system =
-    "너는 한국 언론사의 베테랑 데스크를 보조하는 기사 작성 어시스턴트다. " +
+    "너는 한국 언론사의 베테랑 데스크를 보조하는 기사 작성 어시스턴트다. 네이버 뉴스·네이버 픽에서 높은 조회수를 내는 기사 작법에 정통하다. " +
     "절대 원칙: 특정 기사의 문장을 베끼거나 표현만 살짝 바꾸는 방식(우라까이)은 금지한다. " +
     "대신 웹 검색으로 서로 다른 출처 2곳 이상에서 팩트(수치, 일시, 기관·인물명, 공개 발언)를 교차 확인하고, " +
     "리드와 기사 구조와 모든 문장을 처음부터 독자적으로 새로 작성한다. " +
-    "직접 인용은 공인의 공개 발언만 짧게 사용한다. 확인되지 않은 내용은 쓰지 않는다. " +
-    "출력 형식: 첫 줄 제목, 둘째 줄 부제, 한 줄 띄우고 본문. 본문에 마크다운 기호(**, #, - 등) 절대 사용 금지. " +
-    "기사 맨 끝에 '참고 출처:' 한 줄로 확인에 사용한 매체명을 나열한다.";
+    "직접 인용은 공인의 공개 발언만 짧게 사용한다. 확인되지 않은 내용은 쓰지 않는다.\n\n" +
+    "[네이버 픽 최적화 규칙 — 반드시 적용]\n" +
+    "제목: 25~35자. 핵심 검색 키워드(인물명·사안명)를 제목 앞쪽에 배치. 가장 강한 팩트나 발언을 따옴표 인용형(\"…\")으로 활용. 구체적 숫자가 있으면 제목에 넣기. 궁금증을 남기되 본문이 답을 주는 제목만 허용 — 본문과 무관한 낚시성 제목은 저품질 판정 위험이 있으므로 금지.\n" +
+    "리드: 첫 문장에 가장 자극적인 팩트를 배치해 3초 안에 계속 읽게 만든다. 첫 두 문장 안에 육하원칙 핵심 완결.\n" +
+    "본문: 모바일 가독성 기준. 한 문단은 2~3문장으로 짧게 끊는다. 문단 구분은 줄바꿈 1회만 사용하고 빈 줄은 절대 넣지 않는다. 핵심 검색 키워드를 본문에 자연스럽게 3~5회 반복. 중간에 당사자·전문가 발언 인용으로 리듬을 만들고, 마지막 문단은 향후 전망이나 다음 관전 포인트로 끝내 체류시간을 늘린다.\n\n" +
+    "출력 형식(구분자를 정확히 지킬 것):\n" +
+    "===제목후보===\n" +
+    "1. 첫 번째 제목안\n" +
+    "2. 두 번째 제목안\n" +
+    "3. 세 번째 제목안\n" +
+    "===기사===\n" +
+    "대표 제목(제목후보 중 최선)\n" +
+    "부제\n" +
+    "본문(빈 줄 없이 문단당 줄바꿈 1회)\n" +
+    "===출처===\n" +
+    "확인에 사용한 매체명 나열\n" +
+    "===끝===\n" +
+    "절대 규칙: 위 구분자 외에 '기사 작성을 시작합니다', '검색 결과를 확인했습니다', '다음은 기사입니다' 같은 인사말, 안내문, 설명, 마무리 코멘트를 단 한 글자도 출력하지 마라. 본문에 마크다운 기호(**, #, - 등) 절대 사용 금지.";
 
   const user =
     "다음 이슈에 대한 새 기사를 작성하라.\n" +
@@ -446,7 +492,8 @@ async function writeArticle(){
     });
     const text = extractText(data);
     if(!text) throw new Error("기사 생성 결과가 비어 있습니다.");
-    document.getElementById('articleBody').textContent = text;
+    articleRaw = text;
+    renderArticle(text);
     output.classList.add('show');
     document.getElementById('copied').textContent = "";
   }catch(err){
@@ -459,9 +506,75 @@ async function writeArticle(){
   }
 }
 
+let articleRaw = "";
+
+function parseSections(text){
+  const grab = (name)=>{
+    const re = new RegExp("===\\s*"+name+"\\s*===([\\s\\S]*?)(?====|$)");
+    const m = text.match(re);
+    return m ? m[1].trim() : "";
+  };
+  let titles = grab("제목후보");
+  let art = grab("기사");
+  let src = grab("출처");
+  if(!art){
+    // 구분자가 없으면 전문을 기사로 쓰되, 흔한 안내문 줄은 제거
+    art = text.split("\n").filter(l=>!/^(기사 작성을|검색 결과|다음은 |작성을 시작|확인했습니다|알겠습니다)/.test(l.trim())).join("\n").trim();
+  }
+  return {titles, art, src};
+}
+
+function renderArticle(text){
+  const parsed = parseSections(text);
+  articleRaw = parsed.art;
+
+  // 제목 후보 (클릭하면 해당 제목만 복사)
+  const tBox = document.getElementById('titleCands');
+  tBox.innerHTML = "";
+  if(parsed.titles){
+    parsed.titles.split("\n").map(l=>l.trim()).filter(Boolean).forEach(line=>{
+      const clean = line.replace(/^\d+[.)]\s*/,"");
+      const div = document.createElement('div');
+      div.className = 'cand';
+      div.textContent = clean;
+      div.title = "클릭하면 이 제목이 복사됩니다";
+      div.onclick = ()=>{
+        navigator.clipboard.writeText(clean);
+        div.classList.add('done');
+        setTimeout(()=>div.classList.remove('done'), 1200);
+      };
+      tBox.appendChild(div);
+    });
+    tBox.style.display = 'block';
+  }else{
+    tBox.style.display = 'none';
+  }
+
+  // 기사 본문 (복사 대상은 이 부분만)
+  const box = document.getElementById('articleBody');
+  box.innerHTML = "";
+  parsed.art.split(/\n+/).forEach(line=>{
+    const t = line.trim();
+    if(!t) return;
+    const p = document.createElement('p');
+    p.textContent = t;
+    box.appendChild(p);
+  });
+
+  // 출처 (복사에서 제외, 확인용 표시만)
+  const sBox = document.getElementById('srcLine');
+  if(parsed.src){
+    sBox.textContent = "참고 출처: " + parsed.src.replace(/\n+/g,", ");
+    sBox.style.display = 'block';
+  }else{
+    sBox.style.display = 'none';
+  }
+}
+
 function copyArticle(){
-  const text = document.getElementById('articleBody').textContent;
-  navigator.clipboard.writeText(text).then(()=>{
+  // 기사 본문만, 빈 줄 없이 줄바꿈 1회로 압축 — 기사 입력기에 바로 붙여넣기
+  const compact = articleRaw.replace(/\n{2,}/g,"\n").trim();
+  navigator.clipboard.writeText(compact).then(()=>{
     const c = document.getElementById('copied');
     c.textContent = "복사됨";
     setTimeout(()=>{ c.textContent=""; }, 2000);
