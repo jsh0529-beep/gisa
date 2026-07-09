@@ -251,7 +251,7 @@
 <script>
 let currentTab = 'naver';
 const tabData = { naver:{articles:[], stamp:""}, google:{articles:[], stamp:""}, etc:{articles:[], stamp:""} };
-const tabLabel = { naver:"네이버 많이 본 뉴스", google:"구글", etc:"다음·MSN 랭킹" };
+const tabLabel = { naver:"네이버 많이 본 뉴스", google:"구글", etc:"네이트·다음·MSN 랭킹" };
 let selected = null, selectedTab = null, selectedIndex = -1;
 
 /* ---------- API 키 관리 (이 브라우저에만 저장) ---------- */
@@ -347,7 +347,8 @@ function switchTab(tab){
 /* ---------- 랭킹·헤드라인 직접 수집 (API 비용 0원) ---------- */
 const PROXIES = [
   "https://api.allorigins.win/raw?url=",
-  "https://corsproxy.io/?url="
+  "https://corsproxy.io/?url=",
+  "https://api.codetabs.com/v1/proxy?quest="
 ];
 
 async function fetchRaw(url){
@@ -356,7 +357,9 @@ async function fetchRaw(url){
     try{
       const res = await fetch(p + encodeURIComponent(url));
       if(!res.ok) throw new Error("로드 실패 ("+res.status+")");
-      return await res.arrayBuffer();
+      const buf = await res.arrayBuffer();
+      if(buf.byteLength < 500) throw new Error("응답이 비정상적으로 짧음");
+      return buf;
     }catch(e){ lastErr = e; }
   }
   throw lastErr || new Error("페이지 로드 실패");
@@ -374,11 +377,13 @@ async function fetchDoc(url){
   return new DOMParser().parseFromString(decodeKR(await fetchRaw(url)), "text/html");
 }
 
-async function fetchXml(url){
-  return new DOMParser().parseFromString(decodeKR(await fetchRaw(url)), "text/xml");
-}
-
 function cleanTitle(t){ return t.replace(/\s+/g," ").trim(); }
+
+function deent(s){
+  const t = document.createElement("textarea");
+  t.innerHTML = s;
+  return t.value;
+}
 
 function relTime(pub){
   try{
@@ -389,47 +394,75 @@ function relTime(pub){
   }catch(e){ return ""; }
 }
 
+// RSS를 정규식으로 파싱 — XML 파서가 사소한 오류로 통째로 멈추는 문제 회피
+function parseRssItems(xmlText){
+  const items = [];
+  const blocks = xmlText.match(/<item[\s>][\s\S]*?<\/item>/gi) || [];
+  for(const b of blocks){
+    const pick = (tag)=>{
+      const m = b.match(new RegExp("<"+tag+"[^>]*>([\\s\\S]*?)<\\/"+tag+">","i"));
+      if(!m) return "";
+      return deent(m[1].replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g,"$1").replace(/<[^>]+>/g,"")).trim();
+    };
+    items.push({ title:pick("title"), link:pick("link"), pubDate:pick("pubDate"), source:pick("source") });
+  }
+  return items;
+}
+
 // 구글 뉴스 한국 헤드라인 (공식 RSS)
 async function fetchGoogleNews(){
-  const xml = await fetchXml("https://news.google.com/rss?hl=ko&gl=KR&ceid=KR:ko");
+  const text = decodeKR(await fetchRaw("https://news.google.com/rss?hl=ko&gl=KR&ceid=KR:ko"));
+  const items = parseRssItems(text);
   const out = [], seen = new Set();
-  xml.querySelectorAll("item").forEach(it=>{
-    if(out.length>=10) return;
-    const get = (tag)=>{ const el = it.querySelector(tag); return el ? el.textContent : ""; };
-    let title = cleanTitle(get("title"));
-    let outlet = cleanTitle(get("source"));
-    const link = get("link").trim();
-    const pub = get("pubDate");
+  for(const it of items){
+    if(out.length>=10) break;
+    let title = cleanTitle(it.title), outlet = cleanTitle(it.source);
     const dash = title.lastIndexOf(" - ");
     if(dash > 0){ if(!outlet) outlet = title.slice(dash+3).trim(); title = title.slice(0,dash).trim(); }
-    if(title.length < 8 || seen.has(title)) return;
+    if(title.length < 8 || seen.has(title)) continue;
     seen.add(title);
-    out.push({title, outlet, url:link, time:relTime(pub),
+    out.push({title, outlet, url:it.link, time:relTime(it.pubDate),
       category:"헤드라인", summary:"", potential: out.length<3?"높음":"중간"});
-  });
-  if(!out.length) throw new Error("구글 뉴스 RSS 파싱 실패");
+  }
+  if(out.length < 3) throw new Error("구글 뉴스 RSS 파싱 실패 ("+out.length+"건)");
   return out;
 }
 
 // Bing 뉴스 (MSN 뉴스와 동일 소스, 공식 RSS)
 async function fetchBingNews(){
-  const xml = await fetchXml("https://www.bing.com/news/search?q=%EC%86%8D%EB%B3%B4+%ED%95%9C%EA%B5%AD&format=RSS&mkt=ko-KR");
+  const text = decodeKR(await fetchRaw("https://www.bing.com/news/search?q=%EC%86%8D%EB%B3%B4&format=RSS&mkt=ko-KR"));
+  const items = parseRssItems(text);
   const out = [], seen = new Set();
-  xml.querySelectorAll("item").forEach(it=>{
-    if(out.length>=10) return;
-    const get = (tag)=>{ const el = it.querySelector(tag); return el ? el.textContent : ""; };
-    const title = cleanTitle(get("title"));
-    const link = get("link").trim();
-    const pub = get("pubDate");
-    let outlet = "";
-    const srcEls = it.getElementsByTagName("*");
-    for(const el of srcEls){ if(/source/i.test(el.localName||"")){ outlet = cleanTitle(el.textContent); break; } }
-    if(title.length < 8 || seen.has(title)) return;
+  for(const it of items){
+    if(out.length>=10) break;
+    const title = cleanTitle(it.title);
+    if(title.length < 8 || seen.has(title)) continue;
     seen.add(title);
-    out.push({title, outlet, url:link, time:relTime(pub),
+    out.push({title, outlet:cleanTitle(it.source), url:it.link, time:relTime(it.pubDate),
       category:"MSN·Bing", summary:"", potential: out.length<3?"높음":"중간"});
+  }
+  if(out.length < 3) throw new Error("Bing 뉴스 RSS 파싱 실패 ("+out.length+"건)");
+  return out;
+}
+
+// 네이트 실시간 랭킹 뉴스 — 실제 조회수 기반, 구형 서버렌더링이라 수집 안정적
+async function scrapeNateRanking(){
+  const doc = await fetchDoc("https://news.nate.com/rank/interest?sc=all");
+  const out = [], seen = new Set();
+  doc.querySelectorAll("a").forEach(a=>{
+    if(out.length>=10) return;
+    const href = a.getAttribute("href")||"";
+    if(!/news\.nate\.com\/view\/|^\/view\/\d/.test(href)) return;
+    const t = cleanTitle(a.textContent);
+    if(t.length < 8 || seen.has(t)) return;
+    seen.add(t);
+    let url = href;
+    if(url.startsWith("//")) url = "https:"+url;
+    else if(url.startsWith("/")) url = "https://news.nate.com"+url;
+    out.push({title:t, outlet:"", url, time:"랭킹 "+(out.length+1)+"위",
+      category:"랭킹", summary:"", potential: out.length<3?"높음":"중간"});
   });
-  if(!out.length) throw new Error("Bing 뉴스 RSS 파싱 실패");
+  if(out.length < 3) throw new Error("네이트 랭킹 파싱 실패");
   return out;
 }
 
@@ -578,6 +611,7 @@ async function loadTrending(){
       ]);
     }else if(currentTab === 'etc'){
       result = await tryChain([
+        [scrapeNateRanking, "네이트 실시간 랭킹"],
         [scrapeDaumRanking, "다음 랭킹"],
         [fetchBingNews, "MSN·Bing 뉴스"],
         [aiList, "AI 수집"]
@@ -676,18 +710,8 @@ async function writeArticle(){
     "리드: 첫 문장에 가장 자극적인 팩트를 배치해 3초 안에 계속 읽게 만든다. 첫 두 문장 안에 육하원칙 핵심 완결.\n" +
     "본문: 모바일 가독성 기준. 한 문단은 2~3문장으로 짧게 끊는다. 문단 구분은 줄바꿈 1회만 사용하고 빈 줄은 절대 넣지 않는다. 핵심 검색 키워드를 본문에 자연스럽게 3~5회 반복. 중간에 당사자·전문가 발언 인용으로 리듬을 만든다.\n" +
     "마무리: 기사는 확인된 팩트로 끝낸다. '귀추가 주목된다', '관심이 쏠린다', '전망이다', '~할 것으로 보인다' 같은 상투적 추측·전망 표현으로 끝맺는 것을 절대 금지한다. 마지막 문단은 예정된 일정, 확정된 후속 절차, 당사자의 실제 발언 등 구체적 사실로 담백하게 마친다.\n\n" +
-    "출력 형식(구분자를 정확히 지킬 것):\n" +
-    "===제목후보===\n" +
-    "1. 첫 번째 제목안\n" +
-    "2. 두 번째 제목안\n" +
-    "3. 세 번째 제목안\n" +
-    "===기사===\n" +
-    "대표 제목(제목후보 중 최선)\n" +
-    "부제\n" +
-    "본문(빈 줄 없이 문단당 줄바꿈 1회)\n" +
-    "===출처===\n" +
-    "확인에 사용한 매체명 나열\n" +
-    "===끝===\n" +
+    "출력 형식(구분자를 정확히 지킬 것). 중요: 출력 전체에서 줄바꿈이 필요한 모든 위치(아래 형식의 각 행 사이, 본문 문단 구분)에 줄바꿈 문자 대신 반드시 기호 ¶ 를 사용하라. 줄바꿈 문자는 절대 사용하지 마라.\n" +
+    "===제목후보===¶1. 첫 번째 제목안¶2. 두 번째 제목안¶3. 세 번째 제목안¶===기사===¶대표 제목(제목후보 중 최선)¶부제¶본문 첫 문단¶본문 둘째 문단¶(이하 문단마다 ¶로 구분)¶===출처===¶확인에 사용한 매체명 나열¶===끝===\n" +
     "절대 규칙: 위 구분자 외에 '기사 작성을 시작합니다', '검색 결과를 확인했습니다', '다음은 기사입니다' 같은 인사말, 안내문, 설명, 마무리 코멘트를 단 한 글자도 출력하지 마라. 본문에 마크다운 기호(**, #, - 등) 절대 사용 금지.";
 
   const user =
@@ -752,7 +776,7 @@ function normalizeBody(text){
   const rest = [];
   for(const line of lines.slice(2)){
     const prev = rest[rest.length-1];
-    if(prev !== undefined && !/[.!?다요임음됨함”"』)\]]$/.test(prev)){
+    if(prev !== undefined && !/[.!?다요임음됨함”"'’…』」〉》)\]]$/.test(prev)){
       rest[rest.length-1] = prev + " " + line; // 끊긴 문장 이어붙임
     }else{
       rest.push(line);
@@ -761,8 +785,21 @@ function normalizeBody(text){
   return head.concat(rest).join("\n");
 }
 
+function preClean(text){
+  // ¶ 기호가 있으면: 진짜 개행 문자는 전부 인용 경계에서 샌 잡음이므로 공백으로 치환하고,
+  // ¶만 줄바꿈으로 변환한다. (¶가 없으면 기존 방식 유지)
+  if(text.includes("¶")){
+    return text
+      .replace(/\s*\n+\s*/g, " ")
+      .replace(/\s*¶\s*/g, "\n")
+      .replace(/ {2,}/g, " ")
+      .trim();
+  }
+  return text;
+}
+
 function renderArticle(text){
-  const parsed = parseSections(text);
+  const parsed = parseSections(preClean(text));
   articleRaw = normalizeBody(parsed.art);
 
   // 제목 후보 (클릭하면 해당 제목만 복사)
