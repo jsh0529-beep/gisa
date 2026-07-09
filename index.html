@@ -506,21 +506,28 @@ function parseRssItems(xmlText){
   return items;
 }
 
-// 구글 뉴스 RSS 공용 파서
+// 구글 뉴스 RSS 공용 파서 — 최근 24시간 기사만, 최신순 우선
 async function fetchGoogleFeed(url, catLabel){
   const text = decodeKR(await fetchRaw(url));
   const items = parseRssItems(text);
-  const out = [], seen = new Set();
+  const all = [], seen = new Set();
   for(const it of items){
-    if(out.length>=10) break;
     let title = cleanTitle(it.title), outlet = cleanTitle(it.source);
     const dash = title.lastIndexOf(" - ");
     if(dash > 0){ if(!outlet) outlet = title.slice(dash+3).trim(); title = title.slice(0,dash).trim(); }
     if(title.length < 8 || seen.has(title)) continue;
     seen.add(title);
-    out.push({title, outlet, url:it.link, time:relTime(it.pubDate),
-      category:catLabel, summary:"", potential: out.length<3?"높음":"중간"});
+    let ageH = 999;
+    const d = new Date(it.pubDate);
+    if(!isNaN(d)) ageH = (Date.now()-d.getTime())/3600000;
+    all.push({title, outlet, url:it.link, time:relTime(it.pubDate), ageH,
+      category:catLabel, summary:"", potential:"중간"});
   }
+  // 최근 24시간 이내만 남기고 최신순 정렬 (전부 오래됐으면 원본 유지)
+  let fresh = all.filter(a=>a.ageH <= 24).sort((a,b)=>a.ageH-b.ageH);
+  if(fresh.length < 3) fresh = all;
+  const out = fresh.slice(0,10);
+  out.forEach((a,i)=>{ a.potential = i<3 ? "높음" : "중간"; });
   if(out.length < 3) throw new Error("구글 뉴스 RSS 파싱 실패 ("+out.length+"건)");
   return out;
 }
@@ -539,15 +546,21 @@ async function fetchGoogleTopic(topic, catLabel){
 async function fetchBingNews(){
   const text = decodeKR(await fetchRaw("https://www.bing.com/news/search?q=%EC%86%8D%EB%B3%B4&format=RSS&mkt=ko-KR"));
   const items = parseRssItems(text);
-  const out = [], seen = new Set();
+  const all = [], seen = new Set();
   for(const it of items){
-    if(out.length>=10) break;
     const title = cleanTitle(it.title);
     if(title.length < 8 || seen.has(title)) continue;
     seen.add(title);
-    out.push({title, outlet:cleanTitle(it.source), url:it.link, time:relTime(it.pubDate),
-      category:"MSN·Bing", summary:"", potential: out.length<3?"높음":"중간"});
+    let ageH = 999;
+    const d = new Date(it.pubDate);
+    if(!isNaN(d)) ageH = (Date.now()-d.getTime())/3600000;
+    all.push({title, outlet:cleanTitle(it.source), url:it.link, time:relTime(it.pubDate), ageH,
+      category:"MSN·Bing", summary:"", potential:"중간"});
   }
+  let fresh = all.filter(a=>a.ageH <= 24).sort((a,b)=>a.ageH-b.ageH);
+  if(fresh.length < 3) fresh = all;
+  const out = fresh.slice(0,10);
+  out.forEach((a,i)=>{ a.potential = i<3 ? "높음" : "중간"; });
   if(out.length < 3) throw new Error("Bing 뉴스 RSS 파싱 실패 ("+out.length+"건)");
   return out;
 }
@@ -1107,8 +1120,8 @@ async function loadHot(force){
     const r = await Promise.allSettled([ scrapeNaverRanking(), fetchGoogleNews(), etcChainFree() ]);
     srcs = [
       {key:"n", label:"네이버", items: r[0].status==="fulfilled" ? r[0].value : []},
-      {key:"g", label:"구글",   items: r[1].status==="fulfilled" ? r[1].value : []},
-      {key:"e", label:"기타",   items: r[2].status==="fulfilled" ? r[2].value : []}
+      {key:"e", label:"기타",   items: r[2].status==="fulfilled" ? r[2].value : []},
+      {key:"g", label:"구글",   items: r[1].status==="fulfilled" ? r[1].value : []}
     ];
   }else{
     const conf = HOT_CATS[cat];
@@ -1267,8 +1280,8 @@ async function preloadAll(){
   if(naver.length || google.length || etc.length){
     const srcs = [
       {key:"n", label:"네이버", items:naver},
-      {key:"g", label:"구글", items:google},
-      {key:"e", label:"기타", items:etc}
+      {key:"e", label:"기타", items:etc},
+      {key:"g", label:"구글", items:google}
     ];
     const arts = mergeSources(srcs, "종합");
     const failed = srcs.filter(s=>!s.items.length).map(s=>s.label);
