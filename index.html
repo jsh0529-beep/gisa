@@ -63,6 +63,11 @@
   .srcbadge.n{border-color:#1EC800;color:#149600}
   .srcbadge.g{border-color:#4285F4;color:#2A66C8}
   .srcbadge.e{border-color:#B9880F;color:#96700C}
+  .chips{display:flex;gap:4px}
+  .chip{padding:5px 10px;border:1px solid var(--line);background:#fff;border-radius:14px;
+    font-size:11px;font-weight:600;color:var(--ink-soft);cursor:pointer;font-family:var(--sans)}
+  .chip:hover{border-color:var(--ink-soft)}
+  .chip.on{background:var(--ink);border-color:var(--ink);color:#fff}
 
   .panel{background:var(--surface);border:1px solid var(--line);border-radius:10px;overflow:hidden}
   .panel-head{padding:12px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px}
@@ -216,8 +221,14 @@
       <span class="stamp" id="hotStamp">—</span>
     </div>
     <div class="toolbar">
-      <button class="btn" id="btnHot" onclick="loadHot()">통합 불러오기</button>
-      <span class="stamp" id="hotStatus">네이버 + 구글 + 기타 동시 수집</span>
+      <button class="btn" id="btnHot" onclick="loadHot(true)">불러오기</button>
+      <div class="chips">
+        <button class="chip on" data-cat="종합" onclick="switchHotCat('종합')">종합</button>
+        <button class="chip" data-cat="정치" onclick="switchHotCat('정치')">정치</button>
+        <button class="chip" data-cat="경제" onclick="switchHotCat('경제')">경제</button>
+        <button class="chip" data-cat="사회" onclick="switchHotCat('사회')">사회</button>
+      </div>
+      <span class="stamp" id="hotStatus"></span>
     </div>
     <ul class="list" id="hotList" style="max-height:420px">
       <li class="empty" style="padding:26px 20px">세 소스의 인기 기사를 한 번에 모아 보여줍니다.<br><span style="font-size:11px">전부 직접 수집이라 API 비용이 들지 않습니다.</span></li>
@@ -450,9 +461,9 @@ function parseRssItems(xmlText){
   return items;
 }
 
-// 구글 뉴스 한국 헤드라인 (공식 RSS)
-async function fetchGoogleNews(){
-  const text = decodeKR(await fetchRaw("https://news.google.com/rss?hl=ko&gl=KR&ceid=KR:ko"));
+// 구글 뉴스 RSS 공용 파서
+async function fetchGoogleFeed(url, catLabel){
+  const text = decodeKR(await fetchRaw(url));
   const items = parseRssItems(text);
   const out = [], seen = new Set();
   for(const it of items){
@@ -463,10 +474,20 @@ async function fetchGoogleNews(){
     if(title.length < 8 || seen.has(title)) continue;
     seen.add(title);
     out.push({title, outlet, url:it.link, time:relTime(it.pubDate),
-      category:"헤드라인", summary:"", potential: out.length<3?"높음":"중간"});
+      category:catLabel, summary:"", potential: out.length<3?"높음":"중간"});
   }
   if(out.length < 3) throw new Error("구글 뉴스 RSS 파싱 실패 ("+out.length+"건)");
   return out;
+}
+
+// 구글 뉴스 한국 헤드라인 (공식 RSS)
+async function fetchGoogleNews(){
+  return fetchGoogleFeed("https://news.google.com/rss?hl=ko&gl=KR&ceid=KR:ko", "헤드라인");
+}
+
+// 구글 뉴스 주제별 피드 (POLITICS / BUSINESS / NATION 등)
+async function fetchGoogleTopic(topic, catLabel){
+  return fetchGoogleFeed("https://news.google.com/rss/headlines/section/topic/"+topic+"?hl=ko&gl=KR&ceid=KR:ko", catLabel);
 }
 
 // Bing 뉴스 (MSN 뉴스와 동일 소스, 공식 RSS)
@@ -486,9 +507,9 @@ async function fetchBingNews(){
   return out;
 }
 
-// 네이트 실시간 랭킹 뉴스 — 실제 조회수 기반, 구형 서버렌더링이라 수집 안정적
-async function scrapeNateRanking(){
-  const doc = await fetchDoc("https://news.nate.com/rank/interest?sc=all");
+// 네이트 실시간 랭킹 뉴스 — 실제 조회수 기반, 카테고리별 지원 (all/pol/eco/soc)
+async function scrapeNateRanking(sc){
+  const doc = await fetchDoc("https://news.nate.com/rank/interest?sc="+(sc||"all"));
   const out = [], seen = new Set();
   doc.querySelectorAll("a").forEach(a=>{
     if(out.length>=10) return;
@@ -913,33 +934,61 @@ function copyArticle(){
     setTimeout(()=>{ c.textContent=""; }, 2000);
   });
 }
-/* ---------- 통합 인기 TOP 10 (3개 소스 병렬 수집, API 비용 0원) ---------- */
+/* ---------- 통합 인기 TOP 10 (카테고리별, API 비용 0원) ---------- */
 let hotArticles = [];
+let hotCat = "종합";
+const hotCache = {};  // {카테고리: {articles, stamp, statusText}}
 
-async function loadHot(){
+const HOT_CATS = {
+  "정치": {nate:"pol", topic:"POLITICS"},
+  "경제": {nate:"eco", topic:"BUSINESS"},
+  "사회": {nate:"soc", topic:"NATION"}
+};
+
+function switchHotCat(cat){
+  hotCat = cat;
+  document.querySelectorAll('.chip').forEach(c=>c.classList.toggle('on', c.dataset.cat===cat));
+  const cached = hotCache[cat];
+  if(cached){
+    hotArticles = cached.articles;
+    renderHot();
+    document.getElementById('hotStamp').textContent = cached.stamp;
+    document.getElementById('hotStatus').textContent = cached.statusText;
+  }else{
+    loadHot(false); // 캐시가 없으면 자동 수집 (무료 소스만 사용)
+  }
+}
+
+async function loadHot(force){
   const btn = document.getElementById('btnHot');
   const status = document.getElementById('hotStatus');
   const ul = document.getElementById('hotList');
+  const cat = hotCat;
   btn.disabled = true;
-  status.textContent = "3개 소스 동시 수집 중…";
-  ul.innerHTML = '<li class="empty" style="padding:26px 20px"><div class="loading" style="justify-content:center"><div class="spinner"></div>수집 중…</div></li>';
+  status.textContent = "수집 중…";
+  ul.innerHTML = '<li class="empty" style="padding:26px 20px"><div class="loading" style="justify-content:center"><div class="spinner"></div>'+cat+' 인기 기사 수집 중…</div></li>';
 
-  const etcChain = async ()=>{
-    try{ return await scrapeNateRanking(); }
-    catch(e){ try{ return await scrapeDaumRanking(); }
-    catch(e2){ return await fetchBingNews(); } }
-  };
-
-  const results = await Promise.allSettled([
-    scrapeNaverRanking(),
-    fetchGoogleNews(),
-    etcChain()
-  ]);
-  const srcs = [
-    {key:"n", label:"네이버", items: results[0].status==="fulfilled" ? results[0].value : []},
-    {key:"g", label:"구글",   items: results[1].status==="fulfilled" ? results[1].value : []},
-    {key:"e", label:"기타",   items: results[2].status==="fulfilled" ? results[2].value : []}
-  ];
+  let srcs;
+  if(cat === "종합"){
+    const etcChain = async ()=>{
+      try{ return await scrapeNateRanking("all"); }
+      catch(e){ try{ return await scrapeDaumRanking(); }
+      catch(e2){ return await fetchBingNews(); } }
+    };
+    const r = await Promise.allSettled([ scrapeNaverRanking(), fetchGoogleNews(), etcChain() ]);
+    srcs = [
+      {key:"n", label:"네이버", items: r[0].status==="fulfilled" ? r[0].value : []},
+      {key:"g", label:"구글",   items: r[1].status==="fulfilled" ? r[1].value : []},
+      {key:"e", label:"기타",   items: r[2].status==="fulfilled" ? r[2].value : []}
+    ];
+  }else{
+    const conf = HOT_CATS[cat];
+    const r = await Promise.allSettled([ scrapeNateRanking(conf.nate), fetchGoogleTopic(conf.topic, cat) ]);
+    srcs = [
+      {key:"e", label:"네이트", items: r[0].status==="fulfilled" ? r[0].value : []},
+      {key:"g", label:"구글",   items: r[1].status==="fulfilled" ? r[1].value : []}
+    ];
+  }
   const failed = srcs.filter(s=>!s.items.length).map(s=>s.label);
 
   // 각 소스 상위 기사를 교차 배치하고 제목 중복 제거
@@ -953,19 +1002,21 @@ async function loadHot(){
       const key = it.title.replace(/\s+/g,"").slice(0,20);
       if(seen.has(key)) continue;
       seen.add(key);
-      hotArticles.push(Object.assign({}, it, {src:s.key, srcLabel:s.label}));
+      hotArticles.push(Object.assign({}, it, {src:s.key, srcLabel:s.label, category:cat==="종합"?it.category:cat}));
     }
   }
 
   if(!hotArticles.length){
-    ul.innerHTML = '<li class="empty" style="padding:26px 20px">세 소스 모두 수집에 실패했습니다.<br><span style="font-size:11px">잠시 후 다시 시도해 주세요.</span></li>';
+    ul.innerHTML = '<li class="empty" style="padding:26px 20px">수집에 실패했습니다.<br><span style="font-size:11px">잠시 후 다시 시도해 주세요.</span></li>';
     status.textContent = "";
   }else{
     renderHot();
     const now = new Date();
-    document.getElementById('hotStamp').textContent =
-      now.getHours().toString().padStart(2,'0')+":"+now.getMinutes().toString().padStart(2,'0')+" 기준";
-    status.textContent = failed.length ? (failed.join("·")+" 제외") : "3개 소스 통합";
+    const stamp = now.getHours().toString().padStart(2,'0')+":"+now.getMinutes().toString().padStart(2,'0')+" 기준";
+    const statusText = failed.length ? (failed.join("·")+" 제외") : "";
+    document.getElementById('hotStamp').textContent = stamp;
+    status.textContent = statusText;
+    hotCache[cat] = {articles: hotArticles, stamp, statusText};
   }
   btn.disabled = false;
 }
