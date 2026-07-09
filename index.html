@@ -278,6 +278,7 @@
       <textarea class="facts" id="extraFacts" placeholder="(선택) 추가로 확보한 팩트·취재 내용·코멘트를 여기 붙여넣으면 기사에 반영합니다."></textarea>
 
       <button class="btn hot" id="btnWrite" onclick="writeArticle()" disabled>새 기사 작성</button>
+      <button class="btn" id="btnBroadcast" onclick="writeArticle('broadcast')" disabled style="margin-left:6px">방송용 멘트 작성</button>
 
       <div class="loading" id="writeLoading" style="display:none">
         <div class="spinner"></div><span id="writeStep">복수 출처에서 팩트를 확인하는 중…</span>
@@ -290,6 +291,7 @@
           <button class="btn ghost" style="margin-left:auto;padding:5px 12px;font-size:12px" onclick="copyArticle()">기사 복사</button>
           <span class="copied" id="copied"></span>
         </div>
+        <div class="cands" id="anchorBox" data-label="아나운서 앵커 멘트 — 클릭하면 복사" style="display:none"></div>
         <div class="cands" id="titleCands" data-label="제목 후보 — 클릭하면 복사" style="display:none"></div>
         <div class="cands" id="subCands" data-label="부제 후보 — 클릭하면 복사" style="display:none"></div>
         <div class="article" id="articleBody"></div>
@@ -753,14 +755,16 @@ const PRESS_STYLES = {
 };
 
 /* ---------- 기사 재구성 ---------- */
-async function writeArticle(){
+async function writeArticle(mode){
+  mode = (mode === 'broadcast') ? 'broadcast' : 'article';
   if(!selected) return;
   const btn = document.getElementById('btnWrite');
+  const btnB = document.getElementById('btnBroadcast');
   const loading = document.getElementById('writeLoading');
   const step = document.getElementById('writeStep');
   const errBox = document.getElementById('writeErr');
   const output = document.getElementById('output');
-  btn.disabled = true;
+  btn.disabled = true; btnB.disabled = true;
   errBox.innerHTML = "";
   output.classList.remove('show');
   loading.style.display = 'flex';
@@ -771,37 +775,69 @@ async function writeArticle(){
   const len = document.getElementById('optLen').value;
   const extra = document.getElementById('extraFacts').value.trim();
 
-  const system =
-    "너는 한국 언론사의 베테랑 데스크를 보조하는 기사 작성 어시스턴트다. 네이버 뉴스·네이버 픽에서 높은 조회수를 내는 기사 작법에 정통하다. " +
+  const commonHead =
     "절대 원칙: 특정 기사의 문장을 베끼거나 표현만 살짝 바꾸는 방식(우라까이)은 금지한다. " +
     "대신 웹 검색으로 서로 다른 출처 2곳 이상에서 팩트(수치, 일시, 기관·인물명, 공개 발언)를 교차 확인하고, " +
-    "리드와 기사 구조와 모든 문장을 처음부터 독자적으로 새로 작성한다. " +
-    "직접 인용은 공인의 공개 발언만 짧게 사용한다. 확인되지 않은 내용은 쓰지 않는다.\n\n" +
-    "[네이버 픽 최적화 규칙 — 반드시 적용]\n" +
-    "제목: 25~35자. 핵심 검색 키워드(인물명·사안명)를 제목 앞쪽에 배치. 가장 강한 팩트나 발언을 따옴표 인용형(\"…\")으로 활용. 구체적 숫자가 있으면 제목에 넣기. 궁금증을 남기되 본문이 답을 주는 제목만 허용 — 본문과 무관한 낚시성 제목은 저품질 판정 위험이 있으므로 금지.\n" +
-    "리드: 첫 문장에 가장 자극적인 팩트를 배치해 3초 안에 계속 읽게 만든다. 첫 두 문장 안에 육하원칙 핵심 완결.\n" +
-    "본문: 모바일 가독성 기준. 한 문단은 2~3문장으로 짧게 끊는다. 문단 구분은 줄바꿈 1회만 사용하고 빈 줄은 절대 넣지 않는다. 핵심 검색 키워드를 본문에 자연스럽게 3~5회 반복. 중간에 당사자·전문가 발언 인용으로 리듬을 만든다.\n" +
-    "마무리: 기사는 확인된 팩트로 끝낸다. '귀추가 주목된다', '관심이 쏠린다', '전망이다', '~할 것으로 보인다' 같은 상투적 추측·전망 표현으로 끝맺는 것을 절대 금지한다. 마지막 문단은 예정된 일정, 확정된 후속 절차, 당사자의 실제 발언 등 구체적 사실로 담백하게 마친다.\n\n" +
-    "출력 형식(구분자를 정확히 지킬 것). 중요: 출력 전체에서 줄바꿈이 필요한 모든 위치(아래 형식의 각 행 사이, 본문 문단 구분)에 줄바꿈 문자 대신 반드시 기호 ¶ 를 사용하라. 줄바꿈 문자는 절대 사용하지 마라.\n" +
-    "===제목후보===¶1. 첫 번째 제목안¶2. 두 번째 제목안¶3. 세 번째 제목안¶===부제후보===¶1. 첫 번째 부제안¶2. 두 번째 부제안¶3. 세 번째 부제안¶===기사===¶대표 제목(제목후보 중 최선)¶대표 부제(부제후보 중 최선)¶본문 첫 문단¶본문 둘째 문단¶(이하 문단마다 ¶로 구분)¶===출처===¶확인에 사용한 매체명 나열¶===끝===\n" +
-    "절대 규칙: 위 구분자 외에 '기사 작성을 시작합니다', '검색 결과를 확인했습니다', '다음은 기사입니다' 같은 인사말, 안내문, 설명, 마무리 코멘트를 단 한 글자도 출력하지 마라. 본문에 마크다운 기호(**, #, - 등) 절대 사용 금지. 줄표·대시 문자(—, –, ―)는 제목과 본문 어디에도 절대 사용하지 마라. 문장을 잇거나 부연할 때는 쉼표, 괄호, 또는 문장 분리로 처리하라. 한국 신문 기사에서 줄표는 쓰지 않는 문장 부호다.";
+    "구조와 모든 문장을 처음부터 독자적으로 새로 작성한다. " +
+    "직접 인용은 공인의 공개 발언만 짧게 사용한다. 확인되지 않은 내용은 쓰지 않는다.\n\n";
+
+  const commonTail =
+    "절대 규칙: 위 구분자 외에 인사말, 안내문, 설명, 마무리 코멘트를 단 한 글자도 출력하지 마라. " +
+    "마크다운 기호(**, #, - 등) 절대 사용 금지. 줄표·대시 문자(—, –, ―)는 어디에도 절대 사용하지 마라. 문장을 잇거나 부연할 때는 쉼표, 괄호, 또는 문장 분리로 처리하라. " +
+    "'귀추가 주목된다', '관심이 쏠린다', '전망이다', '~할 것으로 보인다' 같은 상투적 추측·전망 표현으로 끝맺는 것을 절대 금지한다.";
+
+  let system;
+  if(mode === 'article'){
+    system =
+      "너는 한국 언론사의 베테랑 데스크를 보조하는 기사 작성 어시스턴트다. 네이버 뉴스·네이버 픽에서 높은 조회수를 내는 기사 작법에 정통하다. " +
+      commonHead +
+      "[네이버 픽 최적화 규칙 — 반드시 적용]\n" +
+      "제목: 25~35자. 핵심 검색 키워드(인물명·사안명)를 제목 앞쪽에 배치. 가장 강한 팩트나 발언을 따옴표 인용형(\"…\")으로 활용. 구체적 숫자가 있으면 제목에 넣기. 궁금증을 남기되 본문이 답을 주는 제목만 허용. 본문과 무관한 낚시성 제목은 저품질 판정 위험이 있으므로 금지.\n" +
+      "리드: 첫 문장에 가장 자극적인 팩트를 배치해 3초 안에 계속 읽게 만든다. 첫 두 문장 안에 육하원칙 핵심 완결.\n" +
+      "본문: 모바일 가독성 기준. 한 문단은 2~3문장으로 짧게 끊는다. 핵심 검색 키워드를 본문에 자연스럽게 3~5회 반복. 중간에 당사자·전문가 발언 인용으로 리듬을 만든다.\n" +
+      "마무리: 기사는 확인된 팩트로 끝낸다. 마지막 문단은 예정된 일정, 확정된 후속 절차, 당사자의 실제 발언 등 구체적 사실로 담백하게 마친다.\n\n" +
+      "출력 형식(구분자를 정확히 지킬 것). 중요: 출력 전체에서 줄바꿈이 필요한 모든 위치에 줄바꿈 문자 대신 반드시 기호 ¶ 를 사용하라. 줄바꿈 문자는 절대 사용하지 마라.\n" +
+      "===제목후보===¶1. 첫 번째 제목안¶2. 두 번째 제목안¶3. 세 번째 제목안¶===부제후보===¶1. 첫 번째 부제안¶2. 두 번째 부제안¶3. 세 번째 부제안¶===기사===¶대표 제목(제목후보 중 최선)¶대표 부제(부제후보 중 최선)¶본문 첫 문단¶본문 둘째 문단¶(이하 문단마다 ¶로 구분)¶===출처===¶확인에 사용한 매체명 나열¶===끝===\n" +
+      commonTail;
+  }else{
+    system =
+      "너는 한국 방송사 보도국의 베테랑 데스크를 보조하는 방송 뉴스 원고 작성 어시스턴트다. " +
+      commonHead +
+      "[방송 원고 규칙 — 반드시 적용]\n" +
+      "앵커 멘트: 아나운서가 스튜디오에서 리포트 전에 읽는 도입 멘트 3~4문장. 구어체 경어(-습니다, -ㅂ니다)로 쓴다. 시청자의 관심을 끄는 핵심 팩트 하나를 던지고, 마지막 문장은 '취재기자가 전해드립니다', '현장을 취재했습니다' 같은 문장으로 리포트를 부른다. 기자 실명은 넣지 않는다.\n" +
+      "리포트: 기자 리포트 원고. 귀로 듣는 글이므로 한 문장에 정보 하나, 문장은 짧게 끊는다. 구어체 경어체로 쓴다. 숫자는 듣기 쉽게 표기한다(2조5000억원이 아니라 2조 5천억 원). 어려운 한자어 대신 쉬운 말을 쓴다. 인터뷰가 들어갈 자리는 [인터뷰: 이름 / 직함] \"실제 공개 발언 요지\" 형식의 독립된 문단으로 표시하되, 반드시 실제 확인된 공개 발언만 쓴다. 마지막은 확인된 사실이나 확정된 일정으로 담백하게 클로징한다.\n" +
+      "날짜: 리포트에 '오늘', 'O일' 등 시점을 반드시 명시한다.\n\n" +
+      "출력 형식(구분자를 정확히 지킬 것). 중요: 출력 전체에서 줄바꿈이 필요한 모든 위치에 줄바꿈 문자 대신 반드시 기호 ¶ 를 사용하라. 줄바꿈 문자는 절대 사용하지 마라.\n" +
+      "===앵커멘트===¶(앵커 멘트, 문장마다 ¶로 구분)¶===기사===¶(리포트 원고, 문단마다 ¶로 구분, 인터뷰 문단 포함)¶===출처===¶확인에 사용한 매체명 나열¶===끝===\n" +
+      commonTail;
+  }
 
   const nd = new Date();
   const todayStr = nd.getFullYear()+"년 "+(nd.getMonth()+1)+"월 "+nd.getDate()+"일";
 
-  const user =
-    "오늘은 " + todayStr + "이다. 다음 이슈에 대한 새 기사를 작성하라.\n" +
-    "필수: 기사 본문에는 반드시 날짜를 표기하라. 한국 신문 관행대로 리드에 사건·발표 시점을 'O일' 형식으로 명시하고(예: \"9일 국토교통부에 따르면\"), 월이 다르거나 혼동 우려가 있으면 'O월 O일'로 쓴다. 날짜 없는 기사는 불량 기사다.\n" +
+  // 방송 리포트는 신문보다 짧게 (분량 선택을 방송 길이로 환산)
+  const bLen = {"1000":"600자 (약 1분 30초)", "2000":"900자 (약 2분)", "3000":"1200자 (약 3분)"}[len] || "900자";
+
+  let user =
+    "오늘은 " + todayStr + "이다. " +
+    (mode==='article' ? "다음 이슈에 대한 새 기사를 작성하라.\n" : "다음 이슈에 대한 방송 뉴스 원고(앵커 멘트 + 기자 리포트)를 작성하라.\n") +
+    "필수: 본문에는 반드시 날짜를 표기하라. 리드에 사건·발표 시점을 'O일' 형식으로 명시하고(예: \"9일 국토교통부에 따르면\"), 월이 다르거나 혼동 우려가 있으면 'O월 O일'로 쓴다. 날짜 없는 기사는 불량 기사다.\n" +
     "이슈: " + selected.title + "\n" +
     (selected.summary ? "요약: " + selected.summary + "\n" : "") +
     (selected.url ? "참고 URL(팩트 확인용): " + selected.url + "\n" : "") +
-    (extra ? "추가 확보 팩트(우선 반영):\n" + extra + "\n" : "") +
-    "기사 유형: " + style + "\n" +
-    "문체 스타일: " + press + " 스타일로 쓸 것 — " + (PRESS_STYLES[press]||"") + " 이 문체 특성을 리드 구성, 문장 호흡, 어휘 선택, 문단 전개 전반에 일관되게 적용하라. 단, 네이버 픽 최적화 규칙(제목 작법, 문단 길이, 마무리 규칙)은 그대로 지킨다.\n" +
-    "분량: 약 " + len + "자 (지정 분량을 반드시 채울 것. 배경, 경과, 관련 반응, 전망까지 포함해 충실하게 쓸 것)\n" +
-    "웹 검색으로 이 이슈의 최신 팩트를 확인한 뒤 작성하라.";
+    (extra ? "추가 확보 팩트(우선 반영):\n" + extra + "\n" : "");
 
-  const timer = setTimeout(()=>{ step.textContent = "리드와 구조를 새로 짜는 중…"; }, 12000);
+  if(mode === 'article'){
+    user +=
+      "기사 유형: " + style + "\n" +
+      "문체 스타일: " + press + " 스타일로 쓸 것 — " + (PRESS_STYLES[press]||"") + " 이 문체 특성을 리드 구성, 문장 호흡, 어휘 선택, 문단 전개 전반에 일관되게 적용하라. 단, 네이버 픽 최적화 규칙(제목 작법, 문단 길이, 마무리 규칙)은 그대로 지킨다.\n" +
+      "분량: 약 " + len + "자 (지정 분량을 반드시 채울 것. 배경, 경과, 관련 반응까지 포함해 충실하게 쓸 것)\n";
+  }else{
+    user += "리포트 분량: 약 " + bLen + "\n";
+  }
+  user += "웹 검색으로 이 이슈의 최신 팩트를 확인한 뒤 작성하라.";
+
+  const timer = setTimeout(()=>{ step.textContent = (mode==='article' ? "리드와 구조를 새로 짜는 중…" : "앵커 멘트와 리포트를 구성하는 중…"); }, 12000);
 
   try{
     const data = await callClaude({
@@ -811,9 +847,9 @@ async function writeArticle(){
       tools:[{type:"web_search_20250305",name:"web_search",max_uses:3}]
     });
     const text = extractText(data);
-    if(!text) throw new Error("기사 생성 결과가 비어 있습니다.");
+    if(!text) throw new Error("생성 결과가 비어 있습니다.");
     articleRaw = text;
-    renderArticle(text);
+    renderArticle(text, mode);
     output.classList.add('show');
     document.getElementById('copied').textContent = "";
   }catch(err){
@@ -822,7 +858,7 @@ async function writeArticle(){
   }finally{
     clearTimeout(timer);
     loading.style.display = 'none';
-    btn.disabled = false;
+    btn.disabled = false; btnB.disabled = false;
   }
 }
 
@@ -836,13 +872,14 @@ function parseSections(text){
   };
   let titles = grab("제목후보");
   let subs = grab("부제후보");
+  let anchor = grab("앵커멘트");
   let art = grab("기사");
   let src = grab("출처");
   if(!art){
     // 구분자가 없으면 전문을 기사로 쓰되, 흔한 안내문 줄은 제거
     art = text.split("\n").filter(l=>!/^(기사 작성을|검색 결과|다음은 |작성을 시작|확인했습니다|알겠습니다)/.test(l.trim())).join("\n").trim();
   }
-  return {titles, subs, art, src};
+  return {titles, subs, anchor, art, src};
 }
 
 function normalizeBody(text){
@@ -881,9 +918,34 @@ function preClean(text){
   return text;
 }
 
-function renderArticle(text){
+function renderArticle(text, mode){
   const parsed = parseSections(preClean(text));
-  articleRaw = normalizeBody(parsed.art);
+  const body = normalizeBody(parsed.art);
+  const anchor = parsed.anchor ? normalizeBody("0.\n0.\n"+parsed.anchor).split("\n").slice(2).join("\n") : "";
+
+  // 복사본 구성: 방송 모드면 앵커 멘트 + 리포트를 함께
+  articleRaw = anchor ? "[앵커 멘트]\n" + anchor + "\n[리포트]\n" + body : body;
+
+  // 앵커 멘트 박스 (클릭하면 멘트만 복사)
+  const aBox = document.getElementById('anchorBox');
+  aBox.innerHTML = "";
+  if(anchor){
+    const div = document.createElement('div');
+    div.className = 'cand';
+    div.style.whiteSpace = 'pre-wrap';
+    div.style.fontWeight = '500';
+    div.textContent = anchor;
+    div.title = "클릭하면 앵커 멘트만 복사됩니다";
+    div.onclick = ()=>{
+      navigator.clipboard.writeText(anchor);
+      div.classList.add('done');
+      setTimeout(()=>div.classList.remove('done'), 1200);
+    };
+    aBox.appendChild(div);
+    aBox.style.display = 'block';
+  }else{
+    aBox.style.display = 'none';
+  }
 
   // 후보 박스 렌더링 (클릭하면 해당 항목만 복사)
   function renderCands(boxId, raw){
@@ -908,10 +970,10 @@ function renderArticle(text){
   renderCands('titleCands', parsed.titles);
   renderCands('subCands', parsed.subs);
 
-  // 기사 본문 (복사 대상은 이 부분만)
+  // 본문 (신문: 기사 / 방송: 리포트)
   const box = document.getElementById('articleBody');
   box.innerHTML = "";
-  articleRaw.split(/\n+/).forEach(line=>{
+  body.split(/\n+/).forEach(line=>{
     const t = line.trim();
     if(!t) return;
     const p = document.createElement('p');
@@ -1077,8 +1139,13 @@ async function preloadAll(){
   // 세 소스를 딱 한 번씩만 요청해서 탭 리스트와 통합 TOP10에 함께 사용
   const r = await Promise.allSettled([ scrapeNaverRanking(), fetchGoogleNews(), etcChainFree() ]);
   const naver = r[0].status==="fulfilled" ? r[0].value : [];
-  const google = r[1].status==="fulfilled" ? r[1].value : [];
+  let google = r[1].status==="fulfilled" ? r[1].value : [];
   const etc = r[2].status==="fulfilled" ? r[2].value : [];
+
+  // 구글이 실패했으면 한 번 더 시도 (프록시 일시 오류 대비)
+  if(!google.length){
+    try{ google = await fetchGoogleNews(); }catch(e){ console.warn("구글 재시도 실패:", e.message); }
+  }
 
   const now = new Date();
   const stamp = now.getHours().toString().padStart(2,'0')+":"+now.getMinutes().toString().padStart(2,'0')+" 기준 · 자동";
@@ -1109,6 +1176,32 @@ async function preloadAll(){
     }
   }else if(hotCat === "종합" && !hotCache["종합"]){
     hotStatus.textContent = "";
+  }
+
+  // 정치·경제·사회 카테고리도 백그라운드 순차 수집 (프록시 부하 분산을 위해 간격 두고)
+  for(const cat of Object.keys(HOT_CATS)){
+    if(hotCache[cat]) continue;
+    await new Promise(res=>setTimeout(res, 800));
+    try{
+      const conf = HOT_CATS[cat];
+      const r = await Promise.allSettled([ scrapeNateRanking(conf.nate), fetchGoogleTopic(conf.topic, cat) ]);
+      const srcs = [
+        {key:"e", label:"네이트", items: r[0].status==="fulfilled" ? r[0].value : []},
+        {key:"g", label:"구글",   items: r[1].status==="fulfilled" ? r[1].value : []}
+      ];
+      const arts = mergeSources(srcs, cat);
+      if(!arts.length) continue;
+      const failed2 = srcs.filter(s=>!s.items.length).map(s=>s.label);
+      const st = failed2.length ? (failed2.join("·")+" 제외") : "";
+      hotCache[cat] = {articles:arts, stamp, statusText:st};
+      // 사용자가 마침 그 카테고리를 보고 있으면 즉시 반영
+      if(hotCat === cat){
+        hotArticles = arts;
+        renderHot();
+        document.getElementById('hotStamp').textContent = stamp;
+        hotStatus.textContent = st;
+      }
+    }catch(e){ console.warn(cat+" 백그라운드 수집 실패:", e.message); }
   }
 }
 
