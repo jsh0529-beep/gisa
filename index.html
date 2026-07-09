@@ -938,6 +938,13 @@ function copyArticle(){
     setTimeout(()=>{ c.textContent=""; }, 2000);
   });
 }
+// 기타 소스 체인: 네이트 → 다음 → Bing (전부 무료)
+async function etcChainFree(){
+  try{ return await scrapeNateRanking("all"); }
+  catch(e){ try{ return await scrapeDaumRanking(); }
+  catch(e2){ return await fetchBingNews(); } }
+}
+
 /* ---------- 통합 인기 TOP 10 (카테고리별, API 비용 0원) ---------- */
 let hotArticles = [];
 let hotCat = "종합";
@@ -963,6 +970,23 @@ function switchHotCat(cat){
   }
 }
 
+// 여러 소스 상위 기사를 교차 배치하고 제목 중복 제거
+function mergeSources(srcs, cat){
+  const out = [], seen = new Set();
+  for(let round=0; round<10 && out.length<10; round++){
+    for(const s of srcs){
+      if(out.length>=10) break;
+      const it = s.items[round];
+      if(!it) continue;
+      const key = it.title.replace(/\s+/g,"").slice(0,20);
+      if(seen.has(key)) continue;
+      seen.add(key);
+      out.push(Object.assign({}, it, {src:s.key, srcLabel:s.label, category: cat==="종합"?it.category:cat}));
+    }
+  }
+  return out;
+}
+
 async function loadHot(force){
   const btn = document.getElementById('btnHot');
   const status = document.getElementById('hotStatus');
@@ -974,12 +998,7 @@ async function loadHot(force){
 
   let srcs;
   if(cat === "종합"){
-    const etcChain = async ()=>{
-      try{ return await scrapeNateRanking("all"); }
-      catch(e){ try{ return await scrapeDaumRanking(); }
-      catch(e2){ return await fetchBingNews(); } }
-    };
-    const r = await Promise.allSettled([ scrapeNaverRanking(), fetchGoogleNews(), etcChain() ]);
+    const r = await Promise.allSettled([ scrapeNaverRanking(), fetchGoogleNews(), etcChainFree() ]);
     srcs = [
       {key:"n", label:"네이버", items: r[0].status==="fulfilled" ? r[0].value : []},
       {key:"g", label:"구글",   items: r[1].status==="fulfilled" ? r[1].value : []},
@@ -995,20 +1014,7 @@ async function loadHot(force){
   }
   const failed = srcs.filter(s=>!s.items.length).map(s=>s.label);
 
-  // 각 소스 상위 기사를 교차 배치하고 제목 중복 제거
-  hotArticles = [];
-  const seen = new Set();
-  for(let round=0; round<10 && hotArticles.length<10; round++){
-    for(const s of srcs){
-      if(hotArticles.length>=10) break;
-      const it = s.items[round];
-      if(!it) continue;
-      const key = it.title.replace(/\s+/g,"").slice(0,20);
-      if(seen.has(key)) continue;
-      seen.add(key);
-      hotArticles.push(Object.assign({}, it, {src:s.key, srcLabel:s.label, category:cat==="종합"?it.category:cat}));
-    }
-  }
+  hotArticles = mergeSources(srcs, cat);
 
   if(!hotArticles.length){
     ul.innerHTML = '<li class="empty" style="padding:26px 20px">수집에 실패했습니다.<br><span style="font-size:11px">잠시 후 다시 시도해 주세요.</span></li>';
@@ -1061,6 +1067,52 @@ function selectHot(i){
   document.getElementById('output').classList.remove('show');
   document.getElementById('writeErr').innerHTML = "";
 }
+/* ---------- 페이지 로드 시 백그라운드 자동 수집 (무료 소스만) ---------- */
+async function preloadAll(){
+  const listStatus = document.getElementById('loadStatus');
+  const hotStatus = document.getElementById('hotStatus');
+  listStatus.textContent = "백그라운드 수집 중…";
+  hotStatus.textContent = "백그라운드 수집 중…";
+
+  // 세 소스를 딱 한 번씩만 요청해서 탭 리스트와 통합 TOP10에 함께 사용
+  const r = await Promise.allSettled([ scrapeNaverRanking(), fetchGoogleNews(), etcChainFree() ]);
+  const naver = r[0].status==="fulfilled" ? r[0].value : [];
+  const google = r[1].status==="fulfilled" ? r[1].value : [];
+  const etc = r[2].status==="fulfilled" ? r[2].value : [];
+
+  const now = new Date();
+  const stamp = now.getHours().toString().padStart(2,'0')+":"+now.getMinutes().toString().padStart(2,'0')+" 기준 · 자동";
+
+  if(naver.length && !tabData.naver.articles.length){ tabData.naver = {articles:naver, stamp}; }
+  if(google.length && !tabData.google.articles.length){ tabData.google = {articles:google, stamp}; }
+  if(etc.length && !tabData.etc.articles.length){ tabData.etc = {articles:etc, stamp}; }
+
+  // 현재 보고 있는 탭 즉시 갱신
+  if(tabData[currentTab].articles.length){ switchTab(currentTab); }
+  else{ listStatus.textContent = ""; }
+
+  // 통합 종합 TOP10도 같은 데이터로 즉시 구성 (추가 요청 없음)
+  if(!hotCache["종합"] && (naver.length || google.length || etc.length)){
+    const srcs = [
+      {key:"n", label:"네이버", items:naver},
+      {key:"g", label:"구글", items:google},
+      {key:"e", label:"기타", items:etc}
+    ];
+    hotArticles = mergeSources(srcs, "종합");
+    const failed = srcs.filter(s=>!s.items.length).map(s=>s.label);
+    const statusText = failed.length ? (failed.join("·")+" 제외") : "";
+    hotCache["종합"] = {articles:hotArticles, stamp, statusText};
+    if(hotCat === "종합"){
+      renderHot();
+      document.getElementById('hotStamp').textContent = stamp;
+      hotStatus.textContent = statusText;
+    }
+  }else if(hotCat === "종합" && !hotCache["종합"]){
+    hotStatus.textContent = "";
+  }
+}
+
+window.addEventListener('DOMContentLoaded', ()=>{ preloadAll(); });
 </script>
 <footer class="guide">
   <h3>Anthropic API 키 발급받아 등록하는 법</h3>
