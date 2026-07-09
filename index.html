@@ -302,9 +302,11 @@ async function callClaude(body){
 }
 
 function extractText(data){
+  // 웹 검색 사용 시 답변이 인용 단위의 여러 text 블록으로 쪼개져 오므로
+  // 줄바꿈 없이 그대로 이어붙인다 (줄바꿈은 모델이 직접 넣은 것만 유지)
   return (data.content||[])
     .filter(b=>b.type==="text")
-    .map(b=>b.text).join("\n").trim();
+    .map(b=>b.text).join("").trim();
 }
 
 function parseJsonArray(text){
@@ -650,9 +652,27 @@ function parseSections(text){
   return {titles, art, src};
 }
 
+function normalizeBody(text){
+  // 문장이 끝나지 않았는데(종결 부호 없음) 줄이 바뀐 경우 이어붙임
+  // 단, 제목·부제 등 처음 두 줄은 건드리지 않음
+  const lines = text.split("\n").map(l=>l.trim()).filter(Boolean);
+  if(lines.length <= 2) return lines.join("\n");
+  const head = lines.slice(0,2);
+  const rest = [];
+  for(const line of lines.slice(2)){
+    const prev = rest[rest.length-1];
+    if(prev !== undefined && !/[.!?다요임음됨함”"』)\]]$/.test(prev)){
+      rest[rest.length-1] = prev + " " + line; // 끊긴 문장 이어붙임
+    }else{
+      rest.push(line);
+    }
+  }
+  return head.concat(rest).join("\n");
+}
+
 function renderArticle(text){
   const parsed = parseSections(text);
-  articleRaw = parsed.art;
+  articleRaw = normalizeBody(parsed.art);
 
   // 제목 후보 (클릭하면 해당 제목만 복사)
   const tBox = document.getElementById('titleCands');
@@ -679,7 +699,7 @@ function renderArticle(text){
   // 기사 본문 (복사 대상은 이 부분만)
   const box = document.getElementById('articleBody');
   box.innerHTML = "";
-  parsed.art.split(/\n+/).forEach(line=>{
+  articleRaw.split(/\n+/).forEach(line=>{
     const t = line.trim();
     if(!t) return;
     const p = document.createElement('p');
