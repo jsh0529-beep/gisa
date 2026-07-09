@@ -164,6 +164,21 @@
   .cand:hover{background:var(--hot-bg)}
   .cand.done{background:#E4F3EB;color:var(--ok)}
   .srcline{font-family:var(--mono);font-size:11px;color:var(--ink-soft);margin-top:8px;line-height:1.5}
+  .qc{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+  .qc span{font-size:11px;font-weight:600;padding:4px 10px;border-radius:12px}
+  .qc .ok{background:#E4F3EB;color:var(--ok)}
+  .qc .warn{background:#FCF3E2;color:#9A6B00;border:1px solid #EDD9A8}
+  .hist{border-top:2px solid var(--ink);margin-top:18px;padding-top:14px}
+  .hist-head{font-size:13px;font-weight:800;margin-bottom:8px}
+  .hist ul{list-style:none}
+  .hist li{display:flex;gap:8px;align-items:baseline;padding:7px 8px;border-radius:6px;cursor:pointer;font-size:13px}
+  .hist li:hover{background:#F4F7F9}
+  .hist .mode{font-family:var(--mono);font-size:9px;padding:2px 7px;border-radius:3px;background:var(--ink);color:#fff;flex-shrink:0}
+  .hist .mode.b{background:#7A3FA8}
+  .hist .mode.bl{background:#1E7A4F}
+  .hist .mode.s{background:#1D6FE0}
+  .hist .ht{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+  .hist .hm{font-family:var(--mono);font-size:10px;color:var(--ink-soft);margin-left:auto;flex-shrink:0}
   .err{background:var(--hot-bg);border:1px solid #F2C2BF;color:#8E1B15;
     padding:10px 14px;border-radius:6px;font-size:13px;margin-top:10px;line-height:1.5}
   .note{font-size:11px;color:var(--ink-soft);margin-top:10px;line-height:1.6}
@@ -293,6 +308,7 @@
       <button class="btn hot" id="btnWrite" onclick="writeArticle()" disabled>새 기사 작성</button>
       <button class="btn" id="btnBroadcast" onclick="writeArticle('broadcast')" disabled style="margin-left:6px">방송용 멘트 작성</button>
       <button class="btn" id="btnBlog" onclick="writeArticle('blog')" disabled style="margin-left:6px">블로그용 글 작성</button>
+      <button class="btn" id="btnSns" onclick="writeArticle('sns')" disabled style="margin-left:6px">SNS용 글 작성</button>
 
       <div class="loading" id="writeLoading" style="display:none">
         <div class="spinner"></div><span id="writeStep">복수 출처에서 팩트를 확인하는 중…</span>
@@ -305,12 +321,19 @@
           <button class="btn ghost" style="margin-left:auto;padding:5px 12px;font-size:12px" onclick="copyArticle()">기사 복사</button>
           <span class="copied" id="copied"></span>
         </div>
+        <div class="qc" id="qcBox" style="display:none"></div>
         <div class="cands" id="anchorBox" data-label="아나운서 앵커 멘트 — 클릭하면 복사" style="display:none"></div>
         <div class="cands" id="titleCands" data-label="제목 후보 — 클릭하면 복사" style="display:none"></div>
         <div class="cands" id="subCands" data-label="부제 후보 — 클릭하면 복사" style="display:none"></div>
         <div class="article" id="articleBody"></div>
         <div class="srcline" id="srcLine" style="display:none"></div>
         <p class="note">※ 복사 버튼은 기사 본문만 담습니다(제목·부제 후보, 출처 제외, 빈 줄 없음). 제목·부제 후보는 클릭하면 개별 복사됩니다. 수치·발언·일시는 송고 전 반드시 원출처 대조 확인하세요.</p>
+      </div>
+
+      <!-- 작성 이력 (이번 세션) -->
+      <div class="hist" id="histWrap" style="display:none">
+        <div class="hist-head">작성 이력 <span style="font-weight:400;color:var(--ink-soft)">— 클릭하면 다시 열람</span></div>
+        <ul id="histList"></ul>
       </div>
     </div>
   </section>
@@ -914,6 +937,7 @@ function selectArticle(i){
   document.getElementById('btnWrite').disabled = false;
   document.getElementById('btnBroadcast').disabled = false;
   document.getElementById('btnBlog').disabled = false;
+  document.getElementById('btnSns').disabled = false;
   document.getElementById('output').classList.remove('show');
   document.getElementById('writeErr').innerHTML = "";
 }
@@ -928,16 +952,17 @@ const PRESS_STYLES = {
 
 /* ---------- 기사 재구성 ---------- */
 async function writeArticle(mode){
-  mode = (mode === 'broadcast' || mode === 'blog') ? mode : 'article';
+  mode = (mode === 'broadcast' || mode === 'blog' || mode === 'sns') ? mode : 'article';
   if(!selected) return;
   const btn = document.getElementById('btnWrite');
   const btnB = document.getElementById('btnBroadcast');
   const btnBl = document.getElementById('btnBlog');
+  const btnS = document.getElementById('btnSns');
   const loading = document.getElementById('writeLoading');
   const step = document.getElementById('writeStep');
   const errBox = document.getElementById('writeErr');
   const output = document.getElementById('output');
-  btn.disabled = true; btnB.disabled = true; btnBl.disabled = true;
+  btn.disabled = true; btnB.disabled = true; btnBl.disabled = true; btnS.disabled = true;
   errBox.innerHTML = "";
   output.classList.remove('show');
   loading.style.display = 'flex';
@@ -999,6 +1024,18 @@ async function writeArticle(mode){
       "출력 형식(구분자를 정확히 지킬 것). 중요: 출력 전체에서 줄바꿈이 필요한 모든 위치에 줄바꿈 문자 대신 반드시 기호 ¶ 를 사용하라. 줄바꿈 문자는 절대 사용하지 마라.\n" +
       "===제목후보===¶1. 첫 번째 제목안¶2. 두 번째 제목안¶3. 세 번째 제목안¶===기사===¶대표 제목(제목후보 중 최선)¶3줄 요약 첫째 줄¶3줄 요약 둘째 줄¶3줄 요약 셋째 줄¶본문 (한 문장마다 ¶, 문단 사이에 ---------- 한 줄)¶출처: 확인에 사용한 매체명¶#해시태그 7개를 공백으로 구분해 한 줄로¶===끝===\n" +
       "절대 규칙: 위 구분자 외에 인사말이 아닌 안내문, 설명, 메타 코멘트를 단 한 글자도 출력하지 마라. 굵게 표시(**), 마크다운 제목(#으로 시작하는 소제목) 사용 금지 (단, 맨 끝 해시태그의 #과 문단 구분선 ---------- 은 허용). 줄표·대시 문자(—, –, ―)는 사용하지 마라. '귀추가 주목된다', '전망이다' 같은 상투적 추측 표현 금지.";
+  }else if(mode === 'sns'){
+    system =
+      "너는 Threads와 페이스북에서 높은 도달을 만드는 뉴스 SNS 콘텐츠 작성 어시스턴트다. " +
+      commonHead +
+      "[SNS 글 작성 규칙 — 반드시 적용]\n" +
+      "첫 문장: 스크롤을 멈추게 하는 후킹 문장. 놀라운 숫자, 반전, 또는 독자에게 던지는 질문으로 시작한다.\n" +
+      "본문: 전체 500자 이내. 한 문단은 1~2문장으로 아주 짧게 끊는다. 존댓말을 쓰되 신문 문어체가 아니라 사람이 말을 건네는 자연스러운 어투로 쓴다. 핵심 팩트와 날짜를 명확히 담는다. 과장이나 낚시, 확인 안 된 주장 금지. 이모지는 최대 2개까지만 허용.\n" +
+      "마지막 문단: 독자의 의견을 묻는 한 문장으로 참여를 유도한다.\n" +
+      "맨 끝: #키워드 형식 해시태그 3~5개를 한 줄로.\n\n" +
+      "출력 형식(구분자를 정확히 지킬 것). 중요: 출력 전체에서 줄바꿈이 필요한 모든 위치에 줄바꿈 문자 대신 반드시 기호 ¶ 를 사용하라. 줄바꿈 문자는 절대 사용하지 마라.\n" +
+      "===기사===¶후킹 첫 문장¶본문 문단들(문단마다 ¶)¶참여 유도 문장¶#해시태그 한 줄¶===끝===\n" +
+      "절대 규칙: 위 구분자 외에 안내문, 설명, 메타 코멘트를 단 한 글자도 출력하지 마라. 굵게 표시(**) 금지 (맨 끝 해시태그의 #은 허용). 줄표·대시 문자(—, –, ―) 금지. '귀추가 주목된다', '전망이다' 같은 상투 표현 금지.";
   }else{
     system =
       "너는 한국 방송사 보도국의 베테랑 데스크를 보조하는 방송 뉴스 원고 작성 어시스턴트다. " +
@@ -1025,7 +1062,7 @@ async function writeArticle(mode){
 
   let user =
     "오늘은 " + todayStr + "이다. " +
-    (mode==='article' ? "다음 이슈에 대한 새 기사를 작성하라.\n" : mode==='blog' ? "다음 이슈에 대한 네이버 블로그 글을 작성하라.\n" : "다음 이슈에 대한 방송 뉴스 원고(앵커 멘트 + 기자 리포트)를 작성하라.\n") +
+    ({article:"다음 이슈에 대한 새 기사를 작성하라.\n", blog:"다음 이슈에 대한 네이버 블로그 글을 작성하라.\n", sns:"다음 이슈에 대한 Threads·페이스북 겸용 SNS 글을 작성하라.\n", broadcast:"다음 이슈에 대한 방송 뉴스 원고(앵커 멘트 + 기자 리포트)를 작성하라.\n"})[mode] +
     "필수: 본문에는 반드시 날짜를 표기하라. 리드에 사건·발표 시점을 'O일' 형식으로 명시하고(예: \"9일 국토교통부에 따르면\"), 월이 다르거나 혼동 우려가 있으면 'O월 O일'로 쓴다. 날짜 없는 기사는 불량 기사다.\n" +
     "이슈: " + selected.title + "\n" +
     (selected.summary ? "요약: " + selected.summary + "\n" : "") +
@@ -1039,21 +1076,25 @@ async function writeArticle(mode){
       "분량: " + spec.article + " 쓸 것. 지정 범위를 반드시 지켜라.\n";
   }else if(mode === 'blog'){
     user += "분량: 반드시 2,000자 이상 (블로그 규칙 10번). 핵심 검색어를 정하고 SEO를 고려해 쓸 것.\n";
+  }else if(mode === 'sns'){
+    user += "분량: 전체 500자 이내 (해시태그 포함).\n";
   }else{
     user += "리포트 분량: " + spec.broadcast + "\n";
   }
   user += "웹 검색으로 이 이슈의 최신 팩트를 확인한 뒤 작성하라.";
 
-  const timer = setTimeout(()=>{ step.textContent = (mode==='article' ? "리드와 구조를 새로 짜는 중…" : mode==='blog' ? "블로그 글을 구성하는 중…" : "앵커 멘트와 리포트를 구성하는 중…"); }, 12000);
+  const timer = setTimeout(()=>{ step.textContent = ({article:"리드와 구조를 새로 짜는 중…", blog:"블로그 글을 구성하는 중…", sns:"SNS 글을 구성하는 중…", broadcast:"앵커 멘트와 리포트를 구성하는 중…"})[mode]; }, 12000);
 
   try{
     const text = await callAI({
-      tier:'large', maxTokens:6000, searchUses:3,
+      tier:'large', maxTokens: mode==='sns' ? 2000 : 6000, searchUses: mode==='sns' ? 2 : 3,
       system: system, user: user
     });
     if(!text) throw new Error("생성 결과가 비어 있습니다.");
     articleRaw = text;
     renderArticle(text, mode);
+    runQC(mode, len);
+    saveHistory(mode, text, len);
     output.classList.add('show');
     document.getElementById('copied').textContent = "";
   }catch(err){
@@ -1062,7 +1103,7 @@ async function writeArticle(mode){
   }finally{
     clearTimeout(timer);
     loading.style.display = 'none';
-    btn.disabled = false; btnB.disabled = false; btnBl.disabled = false;
+    btn.disabled = false; btnB.disabled = false; btnBl.disabled = false; btnS.disabled = false;
   }
 }
 
@@ -1195,6 +1236,85 @@ function renderArticle(text, mode){
   }else{
     sBox.style.display = 'none';
   }
+}
+
+/* ---------- 송고 전 자동 검수 (API 미사용) ---------- */
+function runQC(mode, lenChoice){
+  const box = document.getElementById('qcBox');
+  const body = articleRaw || "";
+  const issues = [];
+  const n = body.replace(/\s/g,"").length;
+
+  if(mode !== 'sns' && !/\d{1,2}일|오늘/.test(body)) issues.push("날짜 표기가 안 보임");
+  ["귀추가 주목","관심이 쏠리","전망이다","것으로 보인다","것으로 전망"].forEach(b=>{
+    if(body.includes(b)) issues.push("상투 표현: '"+b+"'");
+  });
+  if(/[—–―]/.test(body)) issues.push("줄표(—) 포함");
+  if(/\*\*/.test(body)) issues.push("마크다운(**) 포함");
+  let minLen = 0;
+  if(mode==='article') minLen = lenChoice==='길게' ? 1800 : lenChoice==='짧게' ? 420 : 850;
+  if(mode==='blog') minLen = 1800;
+  if(minLen && n < minLen) issues.push("분량 미달 ("+n.toLocaleString()+"자)");
+  if(mode==='sns' && n > 650) issues.push("SNS 분량 초과 ("+n+"자)");
+  if(mode==='article'){
+    const firstLine = body.split("\n")[0] || "";
+    if(firstLine.length > 42) issues.push("제목이 김 ("+firstLine.length+"자)");
+  }
+
+  box.innerHTML = "";
+  if(issues.length){
+    issues.forEach(i=>{
+      const s = document.createElement('span'); s.className='warn'; s.textContent = "⚠ "+i; box.appendChild(s);
+    });
+  }
+  const okS = document.createElement('span');
+  okS.className = 'ok';
+  okS.textContent = issues.length ? n.toLocaleString()+"자" : "✓ 자동 검수 통과 · "+n.toLocaleString()+"자";
+  box.insertBefore(okS, box.firstChild);
+  box.style.display = 'flex';
+}
+
+/* ---------- 작성 이력 (이번 세션) ---------- */
+let history = [];
+const MODE_LABEL = {article:"기사", broadcast:"방송", blog:"블로그", sns:"SNS"};
+const MODE_CLASS = {article:"", broadcast:"b", blog:"bl", sns:"s"};
+
+function saveHistory(mode, raw, lenChoice){
+  const firstLine = ((parseSections(preClean(raw)).art||"").split("\n")[0]||"").slice(0,60) || (selected ? selected.title : "무제");
+  history.unshift({t:Date.now(), mode, len:lenChoice, label:firstLine, raw});
+  history = history.slice(0,20);
+  try{ sessionStorage.setItem('md_history', JSON.stringify(history)); }catch(e){}
+  renderHistory();
+}
+function renderHistory(){
+  const wrap = document.getElementById('histWrap');
+  const ul = document.getElementById('histList');
+  if(!history.length){ wrap.style.display='none'; return; }
+  ul.innerHTML = "";
+  history.forEach((h,i)=>{
+    const li = document.createElement('li');
+    li.onclick = ()=>openHistory(i);
+    const d = new Date(h.t);
+    const tm = d.getHours().toString().padStart(2,'0')+":"+d.getMinutes().toString().padStart(2,'0');
+    li.innerHTML = '<span class="mode"></span><span class="ht"></span><span class="hm"></span>';
+    const m = li.querySelector('.mode');
+    m.textContent = MODE_LABEL[h.mode]||"기사";
+    if(MODE_CLASS[h.mode]) m.classList.add(MODE_CLASS[h.mode]);
+    li.querySelector('.ht').textContent = h.label;
+    li.querySelector('.hm').textContent = tm;
+    ul.appendChild(li);
+  });
+  wrap.style.display = 'block';
+}
+function openHistory(i){
+  const h = history[i];
+  if(!h) return;
+  articleRaw = h.raw;
+  renderArticle(h.raw, h.mode);
+  runQC(h.mode, h.len);
+  document.getElementById('output').classList.add('show');
+  document.getElementById('copied').textContent = "";
+  document.getElementById('output').scrollIntoView({behavior:'smooth', block:'start'});
 }
 
 function copyArticle(){
@@ -1406,6 +1526,7 @@ function selectHot(i){
   document.getElementById('btnWrite').disabled = false;
   document.getElementById('btnBroadcast').disabled = false;
   document.getElementById('btnBlog').disabled = false;
+  document.getElementById('btnSns').disabled = false;
   document.getElementById('output').classList.remove('show');
   document.getElementById('writeErr').innerHTML = "";
 }
@@ -1539,7 +1660,11 @@ async function preloadAll(){
   saveSessionCache();
 }
 
-window.addEventListener('DOMContentLoaded', ()=>{ preloadAll(); });
+window.addEventListener('DOMContentLoaded', ()=>{
+  try{ history = JSON.parse(sessionStorage.getItem('md_history')||"[]"); }catch(e){ history = []; }
+  renderHistory();
+  preloadAll();
+});
 </script>
 <footer class="guide">
   <h3>API 키 발급받아 등록하는 법</h3>
