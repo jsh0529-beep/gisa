@@ -268,9 +268,9 @@
         </label>
         <label>분량
           <select id="optLen">
-            <option value="1000">짧게 (~1,000자)</option>
-            <option value="2000" selected>보통 (~2,000자)</option>
-            <option value="3000">길게 (~3,000자)</option>
+            <option value="짧게">짧게 (500~700자)</option>
+            <option value="보통" selected>보통 (1,000~1,400자)</option>
+            <option value="길게">길게 (2,000자 이상)</option>
           </select>
         </label>
       </div>
@@ -872,8 +872,13 @@ async function writeArticle(mode){
   const nd = new Date();
   const todayStr = nd.getFullYear()+"년 "+(nd.getMonth()+1)+"월 "+nd.getDate()+"일";
 
-  // 방송 리포트는 신문보다 짧게 (분량 선택을 방송 길이로 환산)
-  const bLen = {"1000":"600자 (약 1분 30초)", "2000":"900자 (약 2분)", "3000":"1200자 (약 3분)"}[len] || "900자";
+  // 분량 구간 정의 (신문 기사 / 방송 리포트)
+  const LEN_SPEC = {
+    "짧게": {article:"500~700자. 핵심 팩트 중심으로 군더더기 없이", broadcast:"500자 안팎 (약 1분 20초)"},
+    "보통": {article:"1,000~1,400자. 배경과 당사자 반응까지 포함해", broadcast:"800자 안팎 (약 2분)"},
+    "길게": {article:"2,000자 이상. 배경, 경과, 관련 반응, 쟁점까지 충실하게", broadcast:"1,200자 안팎 (약 3분)"}
+  };
+  const spec = LEN_SPEC[len] || LEN_SPEC["보통"];
 
   let user =
     "오늘은 " + todayStr + "이다. " +
@@ -888,9 +893,9 @@ async function writeArticle(mode){
     user +=
       "기사 유형: " + style + "\n" +
       "문체 스타일: " + press + " 스타일로 쓸 것 — " + (PRESS_STYLES[press]||"") + " 이 문체 특성을 리드 구성, 문장 호흡, 어휘 선택, 문단 전개 전반에 일관되게 적용하라. 단, 네이버 픽 최적화 규칙(제목 작법, 문단 길이, 마무리 규칙)은 그대로 지킨다.\n" +
-      "분량: 약 " + len + "자 (지정 분량을 반드시 채울 것. 배경, 경과, 관련 반응까지 포함해 충실하게 쓸 것)\n";
+      "분량: " + spec.article + " 쓸 것. 지정 범위를 반드시 지켜라.\n";
   }else{
-    user += "리포트 분량: 약 " + bLen + "\n";
+    user += "리포트 분량: " + spec.broadcast + "\n";
   }
   user += "웹 검색으로 이 이슈의 최신 팩트를 확인한 뒤 작성하라.";
 
