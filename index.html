@@ -380,6 +380,8 @@ function parseJsonArray(text){
 }
 
 /* ---------- 화제 기사 수집 ---------- */
+const tabLoading = {naver:false, google:false, etc:false};
+
 function switchTab(tab){
   currentTab = tab;
   document.getElementById('tabNaver').classList.toggle('on', tab==='naver');
@@ -391,10 +393,42 @@ function switchTab(tab){
     document.getElementById('stamp').textContent = d.stamp;
     document.getElementById('loadStatus').textContent = d.articles.length+"건";
   }else{
+    // 비어 있으면 무료 소스로 즉시 자동 수집
+    freeLoadTab(tab);
+  }
+}
+
+// 무료 소스만 사용하는 탭 자동 수집 (API 비용 0원, AI 폴백 없음)
+async function freeLoadTab(tab){
+  if(tabLoading[tab]) return;
+  tabLoading[tab] = true;
+  if(currentTab === tab){
     document.getElementById('list').innerHTML =
-      '<li class="empty"><b>이슈 불러오기</b>를 누르면 '+tabLabel[tab]+' 기준 화제 기사를 수집합니다.</li>';
+      '<li class="empty"><div class="loading" style="justify-content:center"><div class="spinner"></div>'+tabLabel[tab]+' 자동 수집 중…</div></li>';
     document.getElementById('stamp').textContent = "—";
     document.getElementById('loadStatus').textContent = "";
+  }
+  try{
+    let arts;
+    if(tab==='naver') arts = await scrapeNaverRanking();
+    else if(tab==='google') arts = await fetchGoogleNews();
+    else arts = await etcChainFree();
+    const now = new Date();
+    const stamp = now.getHours().toString().padStart(2,'0')+":"+now.getMinutes().toString().padStart(2,'0')+" 기준 · 자동";
+    tabData[tab] = {articles:arts, stamp};
+    if(currentTab === tab){
+      renderList();
+      document.getElementById('stamp').textContent = stamp;
+      document.getElementById('loadStatus').textContent = arts.length+"건";
+    }
+  }catch(e){
+    console.warn(tab+" 자동 수집 실패:", e.message);
+    if(currentTab === tab){
+      document.getElementById('list').innerHTML =
+        '<li class="empty">자동 수집에 실패했습니다.<br><span style="font-size:11px"><b>이슈 불러오기</b>를 누르면 AI 검색까지 동원해 다시 시도합니다.</span></li>';
+    }
+  }finally{
+    tabLoading[tab] = false;
   }
 }
 
@@ -1136,14 +1170,18 @@ async function preloadAll(){
   listStatus.textContent = "백그라운드 수집 중…";
   hotStatus.textContent = "백그라운드 수집 중…";
 
-  // 세 소스를 딱 한 번씩만 요청해서 탭 리스트와 통합 TOP10에 함께 사용
-  const r = await Promise.allSettled([ scrapeNaverRanking(), fetchGoogleNews(), etcChainFree() ]);
-  const naver = r[0].status==="fulfilled" ? r[0].value : [];
-  let google = r[1].status==="fulfilled" ? r[1].value : [];
-  const etc = r[2].status==="fulfilled" ? r[2].value : [];
+  // 프록시 부하를 피하려고 소스를 순차 수집 (동시 요청 시 일부가 거부되는 문제 방지)
+  const gap = ()=>new Promise(res=>setTimeout(res, 600));
+  let naver=[], google=[], etc=[];
+  try{ naver = await scrapeNaverRanking(); }catch(e){ console.warn("네이버 자동 수집 실패:", e.message); }
+  await gap();
+  try{ google = await fetchGoogleNews(); }catch(e){ console.warn("구글 자동 수집 실패:", e.message); }
+  await gap();
+  try{ etc = await etcChainFree(); }catch(e){ console.warn("기타 자동 수집 실패:", e.message); }
 
   // 구글이 실패했으면 한 번 더 시도 (프록시 일시 오류 대비)
   if(!google.length){
+    await gap();
     try{ google = await fetchGoogleNews(); }catch(e){ console.warn("구글 재시도 실패:", e.message); }
   }
 
