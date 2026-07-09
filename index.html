@@ -143,8 +143,9 @@
   .article p{margin:0 0 10px}
   .article p:last-child{margin-bottom:0}
   .cands{border:1px dashed var(--line);border-radius:8px;padding:10px 14px;margin-bottom:10px;background:#F7F9FA}
-  .cands::before{content:"제목 후보 — 클릭하면 복사";display:block;font-family:var(--mono);font-size:10px;color:var(--ink-soft);margin-bottom:6px}
+  .cands::before{content:attr(data-label);display:block;font-family:var(--mono);font-size:10px;color:var(--ink-soft);margin-bottom:6px}
   .cand{font-size:14px;font-weight:700;padding:5px 8px;border-radius:5px;cursor:pointer;line-height:1.4}
+  #subCands .cand{font-weight:500;font-size:13px}
   .cand:hover{background:var(--hot-bg)}
   .cand.done{background:#E4F3EB;color:var(--ok)}
   .srcline{font-family:var(--mono);font-size:11px;color:var(--ink-soft);margin-top:8px;line-height:1.5}
@@ -239,10 +240,11 @@
           <button class="btn ghost" style="margin-left:auto;padding:5px 12px;font-size:12px" onclick="copyArticle()">기사 복사</button>
           <span class="copied" id="copied"></span>
         </div>
-        <div class="cands" id="titleCands" style="display:none"></div>
+        <div class="cands" id="titleCands" data-label="제목 후보 — 클릭하면 복사" style="display:none"></div>
+        <div class="cands" id="subCands" data-label="부제 후보 — 클릭하면 복사" style="display:none"></div>
         <div class="article" id="articleBody"></div>
         <div class="srcline" id="srcLine" style="display:none"></div>
-        <p class="note">※ 복사 버튼은 기사 본문만 담습니다(제목 후보·출처 제외, 빈 줄 없음). 제목 후보는 클릭하면 개별 복사됩니다. 수치·발언·일시는 송고 전 반드시 원출처 대조 확인하세요.</p>
+        <p class="note">※ 복사 버튼은 기사 본문만 담습니다(제목·부제 후보, 출처 제외, 빈 줄 없음). 제목·부제 후보는 클릭하면 개별 복사됩니다. 수치·발언·일시는 송고 전 반드시 원출처 대조 확인하세요.</p>
       </div>
     </div>
   </section>
@@ -711,7 +713,7 @@ async function writeArticle(){
     "본문: 모바일 가독성 기준. 한 문단은 2~3문장으로 짧게 끊는다. 문단 구분은 줄바꿈 1회만 사용하고 빈 줄은 절대 넣지 않는다. 핵심 검색 키워드를 본문에 자연스럽게 3~5회 반복. 중간에 당사자·전문가 발언 인용으로 리듬을 만든다.\n" +
     "마무리: 기사는 확인된 팩트로 끝낸다. '귀추가 주목된다', '관심이 쏠린다', '전망이다', '~할 것으로 보인다' 같은 상투적 추측·전망 표현으로 끝맺는 것을 절대 금지한다. 마지막 문단은 예정된 일정, 확정된 후속 절차, 당사자의 실제 발언 등 구체적 사실로 담백하게 마친다.\n\n" +
     "출력 형식(구분자를 정확히 지킬 것). 중요: 출력 전체에서 줄바꿈이 필요한 모든 위치(아래 형식의 각 행 사이, 본문 문단 구분)에 줄바꿈 문자 대신 반드시 기호 ¶ 를 사용하라. 줄바꿈 문자는 절대 사용하지 마라.\n" +
-    "===제목후보===¶1. 첫 번째 제목안¶2. 두 번째 제목안¶3. 세 번째 제목안¶===기사===¶대표 제목(제목후보 중 최선)¶부제¶본문 첫 문단¶본문 둘째 문단¶(이하 문단마다 ¶로 구분)¶===출처===¶확인에 사용한 매체명 나열¶===끝===\n" +
+    "===제목후보===¶1. 첫 번째 제목안¶2. 두 번째 제목안¶3. 세 번째 제목안¶===부제후보===¶1. 첫 번째 부제안¶2. 두 번째 부제안¶3. 세 번째 부제안¶===기사===¶대표 제목(제목후보 중 최선)¶대표 부제(부제후보 중 최선)¶본문 첫 문단¶본문 둘째 문단¶(이하 문단마다 ¶로 구분)¶===출처===¶확인에 사용한 매체명 나열¶===끝===\n" +
     "절대 규칙: 위 구분자 외에 '기사 작성을 시작합니다', '검색 결과를 확인했습니다', '다음은 기사입니다' 같은 인사말, 안내문, 설명, 마무리 코멘트를 단 한 글자도 출력하지 마라. 본문에 마크다운 기호(**, #, - 등) 절대 사용 금지.";
 
   const user =
@@ -758,13 +760,14 @@ function parseSections(text){
     return m ? m[1].trim() : "";
   };
   let titles = grab("제목후보");
+  let subs = grab("부제후보");
   let art = grab("기사");
   let src = grab("출처");
   if(!art){
     // 구분자가 없으면 전문을 기사로 쓰되, 흔한 안내문 줄은 제거
     art = text.split("\n").filter(l=>!/^(기사 작성을|검색 결과|다음은 |작성을 시작|확인했습니다|알겠습니다)/.test(l.trim())).join("\n").trim();
   }
-  return {titles, art, src};
+  return {titles, subs, art, src};
 }
 
 function normalizeBody(text){
@@ -802,27 +805,28 @@ function renderArticle(text){
   const parsed = parseSections(preClean(text));
   articleRaw = normalizeBody(parsed.art);
 
-  // 제목 후보 (클릭하면 해당 제목만 복사)
-  const tBox = document.getElementById('titleCands');
-  tBox.innerHTML = "";
-  if(parsed.titles){
-    parsed.titles.split("\n").map(l=>l.trim()).filter(Boolean).forEach(line=>{
+  // 후보 박스 렌더링 (클릭하면 해당 항목만 복사)
+  function renderCands(boxId, raw){
+    const box = document.getElementById(boxId);
+    box.innerHTML = "";
+    if(!raw){ box.style.display = 'none'; return; }
+    raw.split("\n").map(l=>l.trim()).filter(Boolean).forEach(line=>{
       const clean = line.replace(/^\d+[.)]\s*/,"");
       const div = document.createElement('div');
       div.className = 'cand';
       div.textContent = clean;
-      div.title = "클릭하면 이 제목이 복사됩니다";
+      div.title = "클릭하면 복사됩니다";
       div.onclick = ()=>{
         navigator.clipboard.writeText(clean);
         div.classList.add('done');
         setTimeout(()=>div.classList.remove('done'), 1200);
       };
-      tBox.appendChild(div);
+      box.appendChild(div);
     });
-    tBox.style.display = 'block';
-  }else{
-    tBox.style.display = 'none';
+    box.style.display = 'block';
   }
+  renderCands('titleCands', parsed.titles);
+  renderCands('subCands', parsed.subs);
 
   // 기사 본문 (복사 대상은 이 부분만)
   const box = document.getElementById('articleBody');
