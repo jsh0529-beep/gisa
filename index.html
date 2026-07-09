@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>이슈 데스크 — 실시간 이슈 리라이팅 스테이션</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@400;600;900&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#EDF0F3;
+    --surface:#FFFFFF;
+    --ink:#16212B;
+    --ink-soft:#5A6B7A;
+    --line:#D7DEE5;
+    --hot:#E0342C;
+    --hot-bg:#FDEEED;
+    --ok:#1E7A4F;
+    --mono:'IBM Plex Mono',ui-monospace,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,'Apple SD Gothic Neo','Malgun Gothic','Segoe UI',sans-serif;
+    --serif:'Noto Serif KR','Apple SD Gothic Neo',serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--ink);font-family:var(--sans);min-height:100vh}
+
+  header{
+    background:var(--ink);color:#fff;
+    padding:14px 22px;display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;
+  }
+  header h1{font-size:19px;font-weight:800;letter-spacing:-0.5px}
+  header .live{
+    font-family:var(--mono);font-size:11px;color:#FF7A73;display:flex;align-items:center;gap:6px;
+  }
+  header .live::before{
+    content:"";width:7px;height:7px;border-radius:50%;background:var(--hot);
+    animation:blink 1.4s infinite;
+  }
+  @keyframes blink{0%,100%{opacity:1}50%{opacity:.25}}
+  @media (prefers-reduced-motion:reduce){header .live::before{animation:none}}
+  header .sub{font-size:12px;color:#9AAAB8;margin-left:auto}
+
+  /* API 키 설정 바 */
+  .keybar{
+    background:#1F2E3B;padding:9px 22px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;
+  }
+  .keybar .dot{width:8px;height:8px;border-radius:50%;background:#8A99A8}
+  .keybar .dot.on{background:#3DDC84}
+  .keybar label{font-family:var(--mono);font-size:11px;color:#9AAAB8}
+  .keybar input{
+    flex:1;min-width:220px;max-width:420px;padding:7px 10px;border:1px solid #3A4C5C;border-radius:6px;
+    background:#16212B;color:#fff;font-family:var(--mono);font-size:12px;
+  }
+  .keybar button{
+    padding:7px 14px;border:none;border-radius:6px;background:#3A4C5C;color:#fff;
+    font-size:12px;font-weight:600;cursor:pointer;
+  }
+  .keybar button:hover{background:#4A5F72}
+  .keybar .hint{font-size:11px;color:#7A8C9B;width:100%}
+
+  .wrap{max-width:1180px;margin:0 auto;padding:20px 16px;display:grid;grid-template-columns:420px 1fr;gap:18px}
+  @media(max-width:900px){.wrap{grid-template-columns:1fr}}
+
+  .panel{background:var(--surface);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .panel-head{padding:12px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px}
+  .panel-head h2{font-size:14px;font-weight:700}
+  .stamp{font-family:var(--mono);font-size:10px;color:var(--ink-soft);margin-left:auto}
+
+  .tabs{display:flex;border-bottom:1px solid var(--line)}
+  .tabs button{
+    flex:1;padding:11px 0;background:none;border:none;cursor:pointer;
+    font-family:var(--mono);font-size:12px;font-weight:600;color:var(--ink-soft);
+    border-bottom:2px solid transparent;
+  }
+  .tabs button.on{color:var(--ink);border-bottom-color:var(--hot)}
+  .tabs button:focus-visible,button:focus-visible,select:focus-visible,textarea:focus-visible,input:focus-visible{outline:2px solid var(--hot);outline-offset:2px}
+
+  .toolbar{padding:10px 16px;display:flex;gap:8px;align-items:center;border-bottom:1px solid var(--line);background:#F7F9FA}
+  .btn{
+    padding:8px 14px;border:1px solid var(--ink);background:var(--ink);color:#fff;
+    border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--sans);
+  }
+  .btn:hover{background:#2B3B49}
+  .btn.ghost{background:none;color:var(--ink)}
+  .btn.hot{background:var(--hot);border-color:var(--hot)}
+  .btn.hot:hover{background:#C22821}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
+
+  .list{list-style:none;max-height:640px;overflow-y:auto}
+  .item{
+    display:flex;gap:12px;padding:13px 16px;border-bottom:1px solid var(--line);
+    cursor:pointer;align-items:flex-start;
+  }
+  .item:hover{background:#F4F7F9}
+  .item.sel{background:var(--hot-bg)}
+  .rank{
+    font-family:var(--mono);font-size:22px;font-weight:600;color:#B9C4CD;
+    min-width:32px;line-height:1;padding-top:2px;
+  }
+  .item:nth-child(-n+3) .rank{color:var(--hot)}
+  .item .t{font-size:14px;font-weight:600;line-height:1.4;letter-spacing:-0.2px}
+  .item .m{font-family:var(--mono);font-size:10px;color:var(--ink-soft);margin-top:5px;display:flex;gap:8px;flex-wrap:wrap}
+  .cat{background:var(--ink);color:#fff;padding:1px 6px;border-radius:3px}
+  .item .s{font-size:12px;color:var(--ink-soft);margin-top:4px;line-height:1.45}
+
+  .empty{padding:44px 20px;text-align:center;color:var(--ink-soft);font-size:13px;line-height:1.7}
+  .empty b{color:var(--ink)}
+
+  .desk-body{padding:16px}
+  .selbox{
+    border:1px solid var(--line);border-left:3px solid var(--hot);border-radius:6px;
+    padding:12px 14px;margin-bottom:14px;background:#FBFCFD;
+  }
+  .selbox .lab{font-family:var(--mono);font-size:10px;color:var(--hot);font-weight:600;margin-bottom:4px}
+  .selbox .tt{font-size:15px;font-weight:700;line-height:1.4}
+  .selbox a{font-family:var(--mono);font-size:10px;color:var(--ink-soft);word-break:break-all}
+
+  .opts{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+  .opts label{font-size:12px;color:var(--ink-soft);display:flex;flex-direction:column;gap:4px;font-weight:600}
+  .opts select{
+    padding:7px 10px;border:1px solid var(--line);border-radius:6px;font-size:13px;
+    background:#fff;font-family:var(--sans);min-width:150px;
+  }
+  .facts{width:100%;min-height:70px;border:1px solid var(--line);border-radius:6px;padding:10px;
+    font-size:13px;font-family:var(--sans);resize:vertical;margin-bottom:12px;line-height:1.5}
+
+  .loading{
+    display:flex;align-items:center;gap:10px;padding:18px 4px;
+    font-family:var(--mono);font-size:12px;color:var(--ink-soft);
+  }
+  .spinner{width:14px;height:14px;border:2px solid var(--line);border-top-color:var(--hot);border-radius:50%;animation:spin .8s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  .output{
+    border-top:2px solid var(--ink);margin-top:16px;padding-top:16px;display:none;
+  }
+  .output.show{display:block}
+  .output-head{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+  .output-head .lab{font-family:var(--mono);font-size:11px;font-weight:600;color:var(--ink-soft)}
+  .article{
+    font-family:var(--serif);font-size:15px;line-height:1.85;white-space:pre-wrap;
+    background:#FCFCFA;border:1px solid var(--line);border-radius:8px;padding:22px 24px;
+    letter-spacing:-0.1px;
+  }
+  .err{background:var(--hot-bg);border:1px solid #F2C2BF;color:#8E1B15;
+    padding:10px 14px;border-radius:6px;font-size:13px;margin-top:10px;line-height:1.5}
+  .note{font-size:11px;color:var(--ink-soft);margin-top:10px;line-height:1.6}
+  .copied{color:var(--ok);font-family:var(--mono);font-size:11px}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>이슈 데스크</h1>
+  <span class="live">LIVE ISSUE WIRE</span>
+  <span class="sub">화제 기사 수집 → 팩트 추출 → 독자 기사 재구성</span>
+</header>
+
+<!-- API 키 설정 -->
+<div class="keybar">
+  <span class="dot" id="keyDot"></span>
+  <label for="apiKey">ANTHROPIC API KEY</label>
+  <input type="password" id="apiKey" placeholder="sk-ant-api03-..." autocomplete="off">
+  <button onclick="saveKey()">저장</button>
+  <button onclick="clearKey()">삭제</button>
+  <span class="hint">키는 이 브라우저(localStorage)에만 저장되며 서버로 전송되지 않습니다. console.anthropic.com에서 발급. 절대 GitHub 코드에 키를 직접 넣지 마세요.</span>
+</div>
+
+<div class="wrap">
+
+  <!-- 왼쪽: 실시간 리스트 -->
+  <section class="panel">
+    <div class="panel-head">
+      <h2>지금 뜨는 기사</h2>
+      <span class="stamp" id="stamp">—</span>
+    </div>
+    <div class="tabs">
+      <button id="tabNaver" class="on" onclick="switchTab('naver')">NAVER</button>
+      <button id="tabGoogle" onclick="switchTab('google')">GOOGLE</button>
+    </div>
+    <div class="toolbar">
+      <button class="btn" id="btnLoad" onclick="loadTrending()">이슈 불러오기</button>
+      <span class="stamp" id="loadStatus"></span>
+    </div>
+    <ul class="list" id="list">
+      <li class="empty"><b>이슈 불러오기</b>를 누르면<br>지금 화제가 되는 기사 10건을 수집합니다.<br><span style="font-size:11px">포털이 조회수 원데이터를 공개하지 않아<br>속보·주요뉴스·검색 화제도 기반으로 집계합니다.</span></li>
+    </ul>
+  </section>
+
+  <!-- 오른쪽: 재구성 데스크 -->
+  <section class="panel">
+    <div class="panel-head"><h2>기사 재구성 데스크</h2></div>
+    <div class="desk-body">
+      <div id="selArea">
+        <div class="empty" id="noSel">왼쪽 리스트에서 기사를 선택하세요.</div>
+        <div id="selbox" class="selbox" style="display:none">
+          <div class="lab">SELECTED</div>
+          <div class="tt" id="selTitle"></div>
+          <a id="selUrl" target="_blank" rel="noopener"></a>
+        </div>
+      </div>
+
+      <div class="opts">
+        <label>기사 유형
+          <select id="optStyle">
+            <option value="스트레이트">스트레이트 (사실 중심)</option>
+            <option value="해설">해설 기사 (배경·맥락)</option>
+            <option value="인터넷 기사">인터넷 매체 톤 (가독성 중심)</option>
+          </select>
+        </label>
+        <label>분량
+          <select id="optLen">
+            <option value="1000">짧게 (~1,000자)</option>
+            <option value="2000" selected>보통 (~2,000자)</option>
+            <option value="3000">길게 (~3,000자)</option>
+          </select>
+        </label>
+      </div>
+
+      <textarea class="facts" id="extraFacts" placeholder="(선택) 추가로 확보한 팩트·취재 내용·코멘트를 여기 붙여넣으면 기사에 반영합니다."></textarea>
+
+      <button class="btn hot" id="btnWrite" onclick="writeArticle()" disabled>새 기사 작성</button>
+
+      <div class="loading" id="writeLoading" style="display:none">
+        <div class="spinner"></div><span id="writeStep">복수 출처에서 팩트를 확인하는 중…</span>
+      </div>
+      <div id="writeErr"></div>
+
+      <div class="output" id="output">
+        <div class="output-head">
+          <span class="lab">DRAFT — 팩트 기반 재구성</span>
+          <button class="btn ghost" style="margin-left:auto;padding:5px 12px;font-size:12px" onclick="copyArticle()">복사</button>
+          <span class="copied" id="copied"></span>
+        </div>
+        <div class="article" id="articleBody"></div>
+        <p class="note">※ 원문 문장을 바꿔 쓰는 방식이 아니라, 웹에서 확인된 팩트로 리드·구조를 새로 짠 초고입니다. 수치·발언·일시는 송고 전 반드시 원출처 대조 확인하세요.</p>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+let currentTab = 'naver';
+let articles = [];
+let selected = null;
+
+/* ---------- API 키 관리 (이 브라우저에만 저장) ---------- */
+function getKey(){
+  try{ return localStorage.getItem('anthropic_api_key') || ""; }catch(e){ return window.__key || ""; }
+}
+function saveKey(){
+  const v = document.getElementById('apiKey').value.trim();
+  if(!v){ alert('키를 입력하세요.'); return; }
+  try{ localStorage.setItem('anthropic_api_key', v); }catch(e){ window.__key = v; }
+  refreshKeyDot();
+}
+function clearKey(){
+  try{ localStorage.removeItem('anthropic_api_key'); }catch(e){ window.__key = ""; }
+  document.getElementById('apiKey').value = "";
+  refreshKeyDot();
+}
+function refreshKeyDot(){
+  document.getElementById('keyDot').classList.toggle('on', !!getKey());
+}
+window.addEventListener('DOMContentLoaded', ()=>{
+  const k = getKey();
+  if(k) document.getElementById('apiKey').value = k;
+  refreshKeyDot();
+});
+
+/* ---------- Claude API 호출 ---------- */
+async function callClaude(body){
+  const key = getKey();
+  if(!key) throw new Error("API 키가 없습니다. 상단 설정 바에 키를 입력하고 저장하세요.");
+  const res = await fetch("https://api.anthropic.com/v1/messages",{
+    method:"POST",
+    headers:{
+      "Content-Type":"application/json",
+      "x-api-key": key,
+      "anthropic-version":"2023-06-01",
+      "anthropic-dangerous-direct-browser-access":"true"
+    },
+    body:JSON.stringify(Object.assign({model:"claude-sonnet-4-6"}, body))
+  });
+  if(!res.ok){
+    let detail = "";
+    try{ const e = await res.json(); detail = e.error && e.error.message ? " — "+e.error.message : ""; }catch(_){}
+    if(res.status===401) detail = " — API 키가 올바르지 않습니다. 키를 확인하세요.";
+    throw new Error("API 오류 ("+res.status+")"+detail);
+  }
+  return res.json();
+}
+
+function extractText(data){
+  return (data.content||[])
+    .filter(b=>b.type==="text")
+    .map(b=>b.text).join("\n").trim();
+}
+
+function parseJsonArray(text){
+  const clean = text.replace(/```json|```/g,"").trim();
+  const start = clean.indexOf("[");
+  if(start===-1) throw new Error("결과에서 목록을 찾지 못했습니다");
+  const end = clean.lastIndexOf("]");
+  if(end > start){
+    try{ return JSON.parse(clean.slice(start,end+1)); }catch(_){}
+  }
+  // 응답이 잘린 경우 마지막 완전한 항목까지만 살려서 복구
+  const lastObj = clean.lastIndexOf("}");
+  if(lastObj > start){
+    try{ return JSON.parse(clean.slice(start,lastObj+1)+"]"); }catch(_){}
+  }
+  throw new Error("결과 형식을 해석하지 못했습니다");
+}
+
+/* ---------- 화제 기사 수집 ---------- */
+function switchTab(tab){
+  currentTab = tab;
+  document.getElementById('tabNaver').classList.toggle('on', tab==='naver');
+  document.getElementById('tabGoogle').classList.toggle('on', tab==='google');
+  document.getElementById('list').innerHTML =
+    '<li class="empty"><b>이슈 불러오기</b>를 누르면 '+(tab==='naver'?'네이버':'구글')+' 기준 화제 기사를 수집합니다.</li>';
+}
+
+async function loadTrending(){
+  const btn = document.getElementById('btnLoad');
+  const status = document.getElementById('loadStatus');
+  const list = document.getElementById('list');
+  btn.disabled = true;
+  status.textContent = "수집 중…";
+  list.innerHTML = '<li class="empty"><div class="loading" style="justify-content:center"><div class="spinner"></div>화제 기사를 수집하고 있습니다… (20~40초)</div></li>';
+
+  const jsonSpec = '조사가 끝나면 반드시 JSON 배열만 출력하라. 코드블록, 설명, 서두 문장 절대 금지. ' +
+    '[{"title":"기사 제목","outlet":"매체명","time":"발행 시각(예: 2시간 전)","url":"기사 주소","summary":"한 줄 요약(35자 이내)","category":"정치|경제|사회|국제|연예|스포츠|IT"}] 정확히 10개, 화제성 높은 순.';
+
+  const source = currentTab==='naver'
+    ? "네이버 뉴스에 노출 중인 주요·속보 기사"
+    : "구글 뉴스와 구글 트렌드 기준 화제 기사";
+
+  const body = {
+    system: "너는 뉴스 와이어 큐레이터다. 웹 검색으로 조사한 뒤, 최종 답변은 JSON 배열만 출력한다.",
+    max_tokens: 2500,
+    messages:[{role:"user",content:
+      "웹 검색으로 지금 한국에서 화제성이 급상승 중인 뉴스를 조사하라. 기준: " + source + ". " +
+      "'한국 오늘 주요 뉴스 속보' 등으로 2~3회 검색해 종합하고, 같은 주제 중복은 제거하라. " + jsonSpec
+    }],
+    tools:[{type:"web_search_20250305",name:"web_search"}]
+  };
+
+  try{
+    const data = await callClaude(body);
+    articles = parseJsonArray(extractText(data));
+    renderList();
+    const now = new Date();
+    document.getElementById('stamp').textContent =
+      now.getHours().toString().padStart(2,'0')+":"+now.getMinutes().toString().padStart(2,'0')+" 기준";
+    status.textContent = articles.length+"건";
+  }catch(err){
+    console.error(err);
+    list.innerHTML = '<li class="empty">수집에 실패했습니다.<br><span style="font-size:11px">'+err.message+'</span></li>';
+    status.textContent = "";
+  }finally{
+    btn.disabled = false;
+  }
+}
+
+function renderList(){
+  const list = document.getElementById('list');
+  list.innerHTML = "";
+  articles.forEach((a,i)=>{
+    const li = document.createElement('li');
+    li.className = 'item';
+    li.onclick = ()=>selectArticle(i);
+    li.innerHTML =
+      '<div class="rank">'+String(i+1).padStart(2,'0')+'</div>'+
+      '<div><div class="t"></div>'+
+      '<div class="m"><span class="cat"></span><span class="outlet"></span><span class="time"></span></div>'+
+      '<div class="s"></div></div>';
+    li.querySelector('.t').textContent = a.title||"";
+    li.querySelector('.cat').textContent = a.category||"뉴스";
+    li.querySelector('.outlet').textContent = a.outlet||"";
+    li.querySelector('.time').textContent = a.time||"";
+    li.querySelector('.s').textContent = a.summary||"";
+    list.appendChild(li);
+  });
+}
+
+function selectArticle(i){
+  selected = articles[i];
+  document.querySelectorAll('.item').forEach((el,idx)=>el.classList.toggle('sel', idx===i));
+  document.getElementById('noSel').style.display = 'none';
+  const box = document.getElementById('selbox');
+  box.style.display = 'block';
+  document.getElementById('selTitle').textContent = selected.title;
+  const a = document.getElementById('selUrl');
+  a.textContent = selected.url||"";
+  a.href = selected.url||"#";
+  document.getElementById('btnWrite').disabled = false;
+  document.getElementById('output').classList.remove('show');
+  document.getElementById('writeErr').innerHTML = "";
+}
+
+/* ---------- 기사 재구성 ---------- */
+async function writeArticle(){
+  if(!selected) return;
+  const btn = document.getElementById('btnWrite');
+  const loading = document.getElementById('writeLoading');
+  const step = document.getElementById('writeStep');
+  const errBox = document.getElementById('writeErr');
+  const output = document.getElementById('output');
+  btn.disabled = true;
+  errBox.innerHTML = "";
+  output.classList.remove('show');
+  loading.style.display = 'flex';
+  step.textContent = "복수 출처에서 팩트를 확인하는 중…";
+
+  const style = document.getElementById('optStyle').value;
+  const len = document.getElementById('optLen').value;
+  const extra = document.getElementById('extraFacts').value.trim();
+
+  const system =
+    "너는 한국 언론사의 베테랑 데스크를 보조하는 기사 작성 어시스턴트다. " +
+    "절대 원칙: 특정 기사의 문장을 베끼거나 표현만 살짝 바꾸는 방식(우라까이)은 금지한다. " +
+    "대신 웹 검색으로 서로 다른 출처 2곳 이상에서 팩트(수치, 일시, 기관·인물명, 공개 발언)를 교차 확인하고, " +
+    "리드와 기사 구조와 모든 문장을 처음부터 독자적으로 새로 작성한다. " +
+    "직접 인용은 공인의 공개 발언만 짧게 사용한다. 확인되지 않은 내용은 쓰지 않는다. " +
+    "출력 형식: 첫 줄 제목, 둘째 줄 부제, 한 줄 띄우고 본문. 본문에 마크다운 기호(**, #, - 등) 절대 사용 금지. " +
+    "기사 맨 끝에 '참고 출처:' 한 줄로 확인에 사용한 매체명을 나열한다.";
+
+  const user =
+    "다음 이슈에 대한 새 기사를 작성하라.\n" +
+    "이슈: " + selected.title + "\n" +
+    (selected.summary ? "요약: " + selected.summary + "\n" : "") +
+    (selected.url ? "참고 URL(팩트 확인용): " + selected.url + "\n" : "") +
+    (extra ? "추가 확보 팩트(우선 반영):\n" + extra + "\n" : "") +
+    "기사 유형: " + style + "\n" +
+    "분량: 약 " + len + "자 (지정 분량을 반드시 채울 것. 배경, 경과, 관련 반응, 전망까지 포함해 충실하게 쓸 것)\n" +
+    "웹 검색으로 이 이슈의 최신 팩트를 확인한 뒤 작성하라.";
+
+  const timer = setTimeout(()=>{ step.textContent = "리드와 구조를 새로 짜는 중…"; }, 12000);
+
+  try{
+    const data = await callClaude({
+      system: system,
+      max_tokens: 6000,
+      messages:[{role:"user",content:user}],
+      tools:[{type:"web_search_20250305",name:"web_search"}]
+    });
+    const text = extractText(data);
+    if(!text) throw new Error("기사 생성 결과가 비어 있습니다.");
+    document.getElementById('articleBody').textContent = text;
+    output.classList.add('show');
+    document.getElementById('copied').textContent = "";
+  }catch(err){
+    console.error(err);
+    errBox.innerHTML = '<div class="err">작성 실패: '+err.message+'</div>';
+  }finally{
+    clearTimeout(timer);
+    loading.style.display = 'none';
+    btn.disabled = false;
+  }
+}
+
+function copyArticle(){
+  const text = document.getElementById('articleBody').textContent;
+  navigator.clipboard.writeText(text).then(()=>{
+    const c = document.getElementById('copied');
+    c.textContent = "복사됨";
+    setTimeout(()=>{ c.textContent=""; }, 2000);
+  });
+}
+</script>
+</body>
+</html>
