@@ -440,15 +440,24 @@ const PROXIES = [
 ];
 
 async function fetchRaw(url){
+  // 매 요청마다 시작 프록시를 무작위로 골라 부하를 분산하고,
+  // 응답 없는 프록시는 6초 만에 잘라 다음 프록시로 넘어간다
+  const offset = Math.floor(Math.random()*PROXIES.length);
   let lastErr = null;
-  for(const p of PROXIES){
+  for(let i=0; i<PROXIES.length; i++){
+    const p = PROXIES[(i+offset)%PROXIES.length];
     try{
-      const res = await fetch(p + encodeURIComponent(url));
+      const ctrl = new AbortController();
+      const t = setTimeout(()=>ctrl.abort(), 6000);
+      const res = await fetch(p + encodeURIComponent(url), {signal: ctrl.signal});
+      clearTimeout(t);
       if(!res.ok) throw new Error("로드 실패 ("+res.status+")");
       const buf = await res.arrayBuffer();
       if(buf.byteLength < 500) throw new Error("응답이 비정상적으로 짧음");
       return buf;
-    }catch(e){ lastErr = e; }
+    }catch(e){
+      lastErr = (e && e.name==='AbortError') ? new Error("응답 시간 초과") : e;
+    }
   }
   throw lastErr || new Error("페이지 로드 실패");
 }
@@ -1165,84 +1174,116 @@ function selectHot(i){
   document.getElementById('output').classList.remove('show');
   document.getElementById('writeErr').innerHTML = "";
 }
-/* ---------- 페이지 로드 시 백그라운드 자동 수집 (무료 소스만) ---------- */
+/* ---------- 페이지 로드 시 백그라운드 자동 수집 (무료 소스만, 전 소스 병렬) ---------- */
+function stampNow(){
+  const n = new Date();
+  return n.getHours().toString().padStart(2,'0')+":"+n.getMinutes().toString().padStart(2,'0')+" 기준 · 자동";
+}
+
+// 세션 캐시: 5분 이내 재방문이면 저장해둔 리스트를 즉시 표시 (0초 로딩)
+function saveSessionCache(){
+  try{
+    sessionStorage.setItem('md_cache', JSON.stringify({
+      t: Date.now(),
+      tabs: {naver:tabData.naver, google:tabData.google, etc:tabData.etc},
+      hot: hotCache
+    }));
+  }catch(e){}
+}
+function loadSessionCache(){
+  try{
+    const c = JSON.parse(sessionStorage.getItem('md_cache')||"null");
+    if(!c || Date.now()-c.t > 5*60*1000) return false;
+    let any = false;
+    ['naver','google','etc'].forEach(k=>{
+      if(c.tabs && c.tabs[k] && c.tabs[k].articles && c.tabs[k].articles.length){ tabData[k]=c.tabs[k]; any=true; }
+    });
+    Object.assign(hotCache, c.hot||{});
+    if(tabData[currentTab].articles.length) switchTab(currentTab);
+    const hc = hotCache[hotCat];
+    if(hc && hc.articles && hc.articles.length){
+      hotArticles = hc.articles; renderHot();
+      document.getElementById('hotStamp').textContent = hc.stamp;
+      document.getElementById('hotStatus').textContent = hc.statusText||"";
+    }
+    return any;
+  }catch(e){ return false; }
+}
+
 async function preloadAll(){
+  const hadCache = loadSessionCache();
   const listStatus = document.getElementById('loadStatus');
   const hotStatus = document.getElementById('hotStatus');
-  listStatus.textContent = "백그라운드 수집 중…";
-  hotStatus.textContent = "백그라운드 수집 중…";
-
-  // 프록시 부하를 피하려고 소스를 순차 수집 (동시 요청 시 일부가 거부되는 문제 방지)
-  const gap = ()=>new Promise(res=>setTimeout(res, 600));
-  let naver=[], google=[], etc=[];
-  try{ naver = await scrapeNaverRanking(); }catch(e){ console.warn("네이버 자동 수집 실패:", e.message); }
-  await gap();
-  try{ google = await fetchGoogleNews(); }catch(e){ console.warn("구글 자동 수집 실패:", e.message); }
-  await gap();
-  try{ etc = await etcChainFree(); }catch(e){ console.warn("기타 자동 수집 실패:", e.message); }
-
-  // 구글이 실패했으면 한 번 더 시도 (프록시 일시 오류 대비)
-  if(!google.length){
-    await gap();
-    try{ google = await fetchGoogleNews(); }catch(e){ console.warn("구글 재시도 실패:", e.message); }
+  if(!hadCache){
+    listStatus.textContent = "백그라운드 수집 중…";
+    hotStatus.textContent = "백그라운드 수집 중…";
   }
 
-  const now = new Date();
-  const stamp = now.getHours().toString().padStart(2,'0')+":"+now.getMinutes().toString().padStart(2,'0')+" 기준 · 자동";
+  const ok = (r)=> r.status==="fulfilled" ? r.value : [];
 
-  if(naver.length && !tabData.naver.articles.length){ tabData.naver = {articles:naver, stamp}; }
-  if(google.length && !tabData.google.articles.length){ tabData.google = {articles:google, stamp}; }
-  if(etc.length && !tabData.etc.articles.length){ tabData.etc = {articles:etc, stamp}; }
+  // 소스가 도착하는 즉시 해당 탭에 반영 (전체 완료를 기다리지 않음)
+  function applyTab(tab, arts){
+    if(!arts || !arts.length) return;
+    tabData[tab] = {articles: arts, stamp: stampNow()};
+    if(currentTab === tab){
+      renderList();
+      document.getElementById('stamp').textContent = tabData[tab].stamp;
+      listStatus.textContent = arts.length+"건";
+    }
+  }
 
-  // 현재 보고 있는 탭 즉시 갱신
-  if(tabData[currentTab].articles.length){ switchTab(currentTab); }
-  else{ listStatus.textContent = ""; }
+  // 탭 3개 + 카테고리 3개 전부 동시에 출발 (프록시는 요청마다 무작위 분산 + 6초 타임아웃)
+  const pNaver = scrapeNaverRanking().catch(()=>[]);
+  const pGoogle = fetchGoogleNews().catch(()=>fetchGoogleNews()).catch(()=>[]);
+  const pEtc = etcChainFree().catch(()=>[]);
+  pNaver.then(a=>applyTab('naver', a));
+  pGoogle.then(a=>applyTab('google', a));
+  pEtc.then(a=>applyTab('etc', a));
 
-  // 통합 종합 TOP10도 같은 데이터로 즉시 구성 (추가 요청 없음)
-  if(!hotCache["종합"] && (naver.length || google.length || etc.length)){
+  const catTasks = Object.entries(HOT_CATS).map(([cat, conf], i)=>(async ()=>{
+    await new Promise(res=>setTimeout(res, i*300)); // 살짝만 시차
+    try{
+      const r = await Promise.allSettled([ scrapeNateRanking(conf.nate), fetchGoogleTopic(conf.topic, cat) ]);
+      const srcs = [
+        {key:"e", label:"네이트", items: ok(r[0])},
+        {key:"g", label:"구글",   items: ok(r[1])}
+      ];
+      const arts = mergeSources(srcs, cat);
+      if(!arts.length) return;
+      const failed = srcs.filter(s=>!s.items.length).map(s=>s.label);
+      hotCache[cat] = {articles: arts, stamp: stampNow(), statusText: failed.length ? (failed.join("·")+" 제외") : ""};
+      if(hotCat === cat){
+        hotArticles = arts; renderHot();
+        document.getElementById('hotStamp').textContent = hotCache[cat].stamp;
+        hotStatus.textContent = hotCache[cat].statusText;
+      }
+    }catch(e){ console.warn(cat+" 백그라운드 수집 실패:", e.message); }
+  })());
+
+  const [naver, google, etc] = await Promise.all([pNaver, pGoogle, pEtc]);
+  if(currentTab && !tabData[currentTab].articles.length) listStatus.textContent = "";
+
+  // 통합 종합 TOP10은 이미 받은 데이터로 구성 (추가 요청 없음)
+  if(naver.length || google.length || etc.length){
     const srcs = [
       {key:"n", label:"네이버", items:naver},
       {key:"g", label:"구글", items:google},
       {key:"e", label:"기타", items:etc}
     ];
-    hotArticles = mergeSources(srcs, "종합");
+    const arts = mergeSources(srcs, "종합");
     const failed = srcs.filter(s=>!s.items.length).map(s=>s.label);
-    const statusText = failed.length ? (failed.join("·")+" 제외") : "";
-    hotCache["종합"] = {articles:hotArticles, stamp, statusText};
+    hotCache["종합"] = {articles: arts, stamp: stampNow(), statusText: failed.length ? (failed.join("·")+" 제외") : ""};
     if(hotCat === "종합"){
-      renderHot();
-      document.getElementById('hotStamp').textContent = stamp;
-      hotStatus.textContent = statusText;
+      hotArticles = arts; renderHot();
+      document.getElementById('hotStamp').textContent = hotCache["종합"].stamp;
+      hotStatus.textContent = hotCache["종합"].statusText;
     }
   }else if(hotCat === "종합" && !hotCache["종합"]){
     hotStatus.textContent = "";
   }
 
-  // 정치·경제·사회 카테고리도 백그라운드 순차 수집 (프록시 부하 분산을 위해 간격 두고)
-  for(const cat of Object.keys(HOT_CATS)){
-    if(hotCache[cat]) continue;
-    await new Promise(res=>setTimeout(res, 800));
-    try{
-      const conf = HOT_CATS[cat];
-      const r = await Promise.allSettled([ scrapeNateRanking(conf.nate), fetchGoogleTopic(conf.topic, cat) ]);
-      const srcs = [
-        {key:"e", label:"네이트", items: r[0].status==="fulfilled" ? r[0].value : []},
-        {key:"g", label:"구글",   items: r[1].status==="fulfilled" ? r[1].value : []}
-      ];
-      const arts = mergeSources(srcs, cat);
-      if(!arts.length) continue;
-      const failed2 = srcs.filter(s=>!s.items.length).map(s=>s.label);
-      const st = failed2.length ? (failed2.join("·")+" 제외") : "";
-      hotCache[cat] = {articles:arts, stamp, statusText:st};
-      // 사용자가 마침 그 카테고리를 보고 있으면 즉시 반영
-      if(hotCat === cat){
-        hotArticles = arts;
-        renderHot();
-        document.getElementById('hotStamp').textContent = stamp;
-        hotStatus.textContent = st;
-      }
-    }catch(e){ console.warn(cat+" 백그라운드 수집 실패:", e.message); }
-  }
+  await Promise.allSettled(catTasks);
+  saveSessionCache();
 }
 
 window.addEventListener('DOMContentLoaded', ()=>{ preloadAll(); });
