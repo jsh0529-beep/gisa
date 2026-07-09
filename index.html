@@ -348,63 +348,87 @@ const PROXY = "https://api.allorigins.win/raw?url=";
 async function fetchDoc(url){
   const res = await fetch(PROXY + encodeURIComponent(url));
   if(!res.ok) throw new Error("랭킹 페이지 로드 실패 ("+res.status+")");
-  const html = await res.text();
+  const buf = await res.arrayBuffer();
+  let html = new TextDecoder("utf-8").decode(buf);
+  // 한글 깨짐(치환문자) 또는 EUC-KR 선언 감지 시 EUC-KR로 다시 해석
+  if((html.match(/\uFFFD/g)||[]).length > 5 || /charset=["']?euc-kr/i.test(html.slice(0,2000))){
+    try{ html = new TextDecoder("euc-kr").decode(buf); }catch(_){}
+  }
   return new DOMParser().parseFromString(html, "text/html");
 }
 
-// 네이버 '많이 본 뉴스' (언론사별 랭킹) — 각 언론사 1위 기사부터 교차 수집
+function cleanTitle(t){ return t.replace(/\s+/g," ").trim(); }
+
+// 네이버 '많이 본 뉴스' — 구조가 바뀌어도 기사 링크 패턴으로 수집
 async function scrapeNaverRanking(){
   const doc = await fetchDoc("https://news.naver.com/main/ranking/popularDay.naver");
+  const out = [], seen = new Set();
+
+  // 1차: 언론사별 랭킹 박스 구조 (1위 기사부터 교차 수집)
   const boxes = [];
   doc.querySelectorAll(".rankingnews_box").forEach(box=>{
-    const press = (box.querySelector(".rankingnews_name")||{}).textContent || "";
+    const press = cleanTitle((box.querySelector(".rankingnews_name")||{textContent:""}).textContent);
     const items = [];
-    box.querySelectorAll(".rankingnews_list li").forEach(li=>{
-      const a = li.querySelector("a.list_title") || li.querySelector("a");
-      if(a && a.textContent.trim()){
-        let href = a.getAttribute("href") || "";
-        if(href.startsWith("/")) href = "https://news.naver.com" + href;
-        items.push({ title:a.textContent.trim(), url:href });
-      }
+    box.querySelectorAll("li a").forEach(a=>{
+      const t = cleanTitle(a.textContent);
+      if(t.length < 8) return;
+      let href = a.getAttribute("href")||"";
+      if(href.startsWith("/")) href = "https://news.naver.com"+href;
+      items.push({title:t, url:href});
     });
-    if(items.length) boxes.push({ press:press.trim(), items });
+    if(items.length) boxes.push({press, items});
   });
-  if(!boxes.length) throw new Error("네이버 랭킹 파싱 실패");
-  // 언론사별 1위부터 교차로 뽑아 상위 10건 (중복 제목 제거)
-  const out = [], seen = new Set();
-  for(let round=0; round<5 && out.length<10; round++){
-    for(const b of boxes){
-      if(out.length>=10) break;
-      const it = b.items[round];
-      if(!it || seen.has(it.title)) continue;
-      seen.add(it.title);
-      out.push({
-        title: it.title, outlet: b.press, url: it.url,
-        time: "많이 본 뉴스", category: "랭킹",
-        summary: "", potential: round===0 ? "높음" : "중간"
-      });
+  if(boxes.length){
+    for(let round=0; round<5 && out.length<10; round++){
+      for(const b of boxes){
+        if(out.length>=10) break;
+        const it = b.items[round];
+        if(!it || seen.has(it.title)) continue;
+        seen.add(it.title);
+        out.push({title:it.title, outlet:b.press, url:it.url, time:"많이 본 뉴스",
+          category:"랭킹", summary:"", potential: round===0?"높음":"중간"});
+      }
     }
   }
+
+  // 2차: 구조가 달라졌으면 네이버 기사 링크 패턴으로 직접 수집
+  if(!out.length){
+    doc.querySelectorAll("a").forEach(a=>{
+      if(out.length>=10) return;
+      const href = a.getAttribute("href")||"";
+      if(!/n\.news\.naver\.com\/article|news\.naver\.com\/main\/(read|ranking\/read)/.test(href)) return;
+      const t = cleanTitle(a.textContent);
+      if(t.length < 8 || seen.has(t)) return;
+      seen.add(t);
+      out.push({title:t, outlet:"", url: href.startsWith("/")?"https://news.naver.com"+href:href,
+        time:"많이 본 뉴스", category:"랭킹", summary:"", potential: out.length<3?"높음":"중간"});
+    });
+  }
+
+  if(!out.length) throw new Error("네이버 랭킹 파싱 실패");
   return out;
 }
 
-// 다음 '랭킹 뉴스' (많이 본 순 통합 랭킹)
+// 다음 '랭킹 뉴스' — 기사 링크 패턴(v.daum.net)으로 수집
 async function scrapeDaumRanking(){
   const doc = await fetchDoc("https://news.daum.net/ranking/popular");
   const out = [], seen = new Set();
-  doc.querySelectorAll("ul.list_news2 > li").forEach((li,i)=>{
+  doc.querySelectorAll("a").forEach(a=>{
     if(out.length>=10) return;
-    const a = li.querySelector("a.link_txt");
-    if(!a || !a.textContent.trim()) return;
-    const title = a.textContent.trim();
-    if(seen.has(title)) return;
-    seen.add(title);
-    const press = (li.querySelector(".info_news")||{}).textContent || "";
-    out.push({
-      title: title, outlet: press.split("·")[0].trim(), url: a.getAttribute("href")||"",
-      time: "랭킹 "+(i+1)+"위", category: "랭킹",
-      summary: "", potential: i<3 ? "높음" : "중간"
-    });
+    const href = a.getAttribute("href")||"";
+    if(!/v\.daum\.net\/v\//.test(href)) return;
+    const t = cleanTitle(a.textContent);
+    if(t.length < 8 || seen.has(t)) return;
+    seen.add(t);
+    // 매체명: 링크 주변의 정보 영역에서 탐색
+    let press = "";
+    const li = a.closest("li");
+    if(li){
+      const info = li.querySelector(".info_news, .txt_info, .info_thumb");
+      if(info) press = cleanTitle(info.textContent).split("·")[0].trim();
+    }
+    out.push({title:t, outlet:press, url:href, time:"랭킹 "+(out.length+1)+"위",
+      category:"랭킹", summary:"", potential: out.length<3?"높음":"중간"});
   });
   if(!out.length) throw new Error("다음 랭킹 파싱 실패");
   return out;
@@ -433,7 +457,7 @@ async function loadTrending(){
 
   // AI 폴백: 저가 모델(Haiku) + 검색 2회 제한으로 비용 최소화
   const aiBody = {
-    model: "claude-haiku-4-5",
+    model: "claude-haiku-4-5-20251001",
     system: "너는 뉴스 와이어 큐레이터다. 웹 검색으로 조사한 뒤, 최종 답변은 JSON 배열만 출력한다.",
     max_tokens: 2500,
     messages:[{role:"user",content:
@@ -444,20 +468,34 @@ async function loadTrending(){
     tools:[{type:"web_search_20250305",name:"web_search",max_uses:2}]
   };
 
+  // Haiku가 거부되면(모델 미지원 등) Sonnet으로 자동 재시도
+  async function aiList(){
+    try{
+      return parseJsonArray(extractText(await callClaude(aiBody)));
+    }catch(e){
+      if(/404|model|not_found/i.test(e.message)){
+        console.warn("Haiku 실패, Sonnet으로 재시도:", e.message);
+        const b = Object.assign({}, aiBody, {model:"claude-sonnet-4-6"});
+        return parseJsonArray(extractText(await callClaude(b)));
+      }
+      throw e;
+    }
+  }
+
   try{
     let parsed, method = "";
     if(currentTab === 'naver'){
       try{ parsed = await scrapeNaverRanking(); method = "실시간 랭킹"; }
       catch(e){ console.warn("네이버 랭킹 수집 실패, AI 검색 폴백:", e.message);
         status.textContent = "AI 검색으로 재시도…";
-        parsed = parseJsonArray(extractText(await callClaude(aiBody))); method = "AI 수집"; }
+        parsed = await aiList(); method = "AI 수집"; }
     }else if(currentTab === 'etc'){
       try{ parsed = await scrapeDaumRanking(); method = "실시간 랭킹"; }
       catch(e){ console.warn("다음 랭킹 수집 실패, AI 검색 폴백:", e.message);
         status.textContent = "AI 검색으로 재시도…";
-        parsed = parseJsonArray(extractText(await callClaude(aiBody))); method = "AI 수집"; }
+        parsed = await aiList(); method = "AI 수집"; }
     }else{
-      parsed = parseJsonArray(extractText(await callClaude(aiBody))); method = "AI 수집";
+      parsed = await aiList(); method = "AI 수집";
     }
     const now = new Date();
     const stamp = now.getHours().toString().padStart(2,'0')+":"+now.getMinutes().toString().padStart(2,'0')+" 기준 · "+method;
