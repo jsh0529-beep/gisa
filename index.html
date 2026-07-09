@@ -344,22 +344,94 @@ function switchTab(tab){
   }
 }
 
-/* ---------- 랭킹 페이지 직접 수집 (API 비용 0원) ---------- */
-const PROXY = "https://api.allorigins.win/raw?url=";
+/* ---------- 랭킹·헤드라인 직접 수집 (API 비용 0원) ---------- */
+const PROXIES = [
+  "https://api.allorigins.win/raw?url=",
+  "https://corsproxy.io/?url="
+];
 
-async function fetchDoc(url){
-  const res = await fetch(PROXY + encodeURIComponent(url));
-  if(!res.ok) throw new Error("랭킹 페이지 로드 실패 ("+res.status+")");
-  const buf = await res.arrayBuffer();
+async function fetchRaw(url){
+  let lastErr = null;
+  for(const p of PROXIES){
+    try{
+      const res = await fetch(p + encodeURIComponent(url));
+      if(!res.ok) throw new Error("로드 실패 ("+res.status+")");
+      return await res.arrayBuffer();
+    }catch(e){ lastErr = e; }
+  }
+  throw lastErr || new Error("페이지 로드 실패");
+}
+
+function decodeKR(buf){
   let html = new TextDecoder("utf-8").decode(buf);
-  // 한글 깨짐(치환문자) 또는 EUC-KR 선언 감지 시 EUC-KR로 다시 해석
   if((html.match(/\uFFFD/g)||[]).length > 5 || /charset=["']?euc-kr/i.test(html.slice(0,2000))){
     try{ html = new TextDecoder("euc-kr").decode(buf); }catch(_){}
   }
-  return new DOMParser().parseFromString(html, "text/html");
+  return html;
+}
+
+async function fetchDoc(url){
+  return new DOMParser().parseFromString(decodeKR(await fetchRaw(url)), "text/html");
+}
+
+async function fetchXml(url){
+  return new DOMParser().parseFromString(decodeKR(await fetchRaw(url)), "text/xml");
 }
 
 function cleanTitle(t){ return t.replace(/\s+/g," ").trim(); }
+
+function relTime(pub){
+  try{
+    const d = new Date(pub);
+    if(isNaN(d)) return "";
+    const h = Math.round((Date.now()-d.getTime())/3600000);
+    return h<=0 ? "방금" : h<24 ? h+"시간 전" : Math.round(h/24)+"일 전";
+  }catch(e){ return ""; }
+}
+
+// 구글 뉴스 한국 헤드라인 (공식 RSS)
+async function fetchGoogleNews(){
+  const xml = await fetchXml("https://news.google.com/rss?hl=ko&gl=KR&ceid=KR:ko");
+  const out = [], seen = new Set();
+  xml.querySelectorAll("item").forEach(it=>{
+    if(out.length>=10) return;
+    const get = (tag)=>{ const el = it.querySelector(tag); return el ? el.textContent : ""; };
+    let title = cleanTitle(get("title"));
+    let outlet = cleanTitle(get("source"));
+    const link = get("link").trim();
+    const pub = get("pubDate");
+    const dash = title.lastIndexOf(" - ");
+    if(dash > 0){ if(!outlet) outlet = title.slice(dash+3).trim(); title = title.slice(0,dash).trim(); }
+    if(title.length < 8 || seen.has(title)) return;
+    seen.add(title);
+    out.push({title, outlet, url:link, time:relTime(pub),
+      category:"헤드라인", summary:"", potential: out.length<3?"높음":"중간"});
+  });
+  if(!out.length) throw new Error("구글 뉴스 RSS 파싱 실패");
+  return out;
+}
+
+// Bing 뉴스 (MSN 뉴스와 동일 소스, 공식 RSS)
+async function fetchBingNews(){
+  const xml = await fetchXml("https://www.bing.com/news/search?q=%EC%86%8D%EB%B3%B4+%ED%95%9C%EA%B5%AD&format=RSS&mkt=ko-KR");
+  const out = [], seen = new Set();
+  xml.querySelectorAll("item").forEach(it=>{
+    if(out.length>=10) return;
+    const get = (tag)=>{ const el = it.querySelector(tag); return el ? el.textContent : ""; };
+    const title = cleanTitle(get("title"));
+    const link = get("link").trim();
+    const pub = get("pubDate");
+    let outlet = "";
+    const srcEls = it.getElementsByTagName("*");
+    for(const el of srcEls){ if(/source/i.test(el.localName||"")){ outlet = cleanTitle(el.textContent); break; } }
+    if(title.length < 8 || seen.has(title)) return;
+    seen.add(title);
+    out.push({title, outlet, url:link, time:relTime(pub),
+      category:"MSN·Bing", summary:"", potential: out.length<3?"높음":"중간"});
+  });
+  if(!out.length) throw new Error("Bing 뉴스 RSS 파싱 실패");
+  return out;
+}
 
 // 네이버 '많이 본 뉴스' — 구조가 바뀌어도 기사 링크 패턴으로 수집
 async function scrapeNaverRanking(){
@@ -470,35 +542,53 @@ async function loadTrending(){
     tools:[{type:"web_search_20250305",name:"web_search",max_uses:2}]
   };
 
-  // Haiku가 거부되면(모델 미지원 등) Sonnet으로 자동 재시도
+  // Haiku가 실패하면 어떤 오류든 Sonnet으로 한 번 더 시도
   async function aiList(){
     try{
       return parseJsonArray(extractText(await callClaude(aiBody)));
     }catch(e){
-      if(/404|model|not_found/i.test(e.message)){
-        console.warn("Haiku 실패, Sonnet으로 재시도:", e.message);
-        const b = Object.assign({}, aiBody, {model:"claude-sonnet-4-6"});
-        return parseJsonArray(extractText(await callClaude(b)));
-      }
-      throw e;
+      console.warn("Haiku 실패, Sonnet으로 재시도:", e.message);
+      const b = Object.assign({}, aiBody, {model:"claude-sonnet-4-6"});
+      return parseJsonArray(extractText(await callClaude(b)));
     }
   }
 
-  try{
-    let parsed, method = "";
-    if(currentTab === 'naver'){
-      try{ parsed = await scrapeNaverRanking(); method = "실시간 랭킹"; }
-      catch(e){ console.warn("네이버 랭킹 수집 실패, AI 검색 폴백:", e.message);
-        status.textContent = "AI 검색으로 재시도…";
-        parsed = await aiList(); method = "AI 수집"; }
-    }else if(currentTab === 'etc'){
-      try{ parsed = await scrapeDaumRanking(); method = "실시간 랭킹"; }
-      catch(e){ console.warn("다음 랭킹 수집 실패, AI 검색 폴백:", e.message);
-        status.textContent = "AI 검색으로 재시도…";
-        parsed = await aiList(); method = "AI 수집"; }
-    }else{
-      parsed = await aiList(); method = "AI 수집";
+  // 소스를 순서대로 시도 — 앞의 것이 실패하면 다음으로
+  async function tryChain(chain){
+    let lastErr = null;
+    for(const [fn, label] of chain){
+      try{
+        const parsed = await fn();
+        return {parsed, method: label};
+      }catch(e){
+        console.warn(label+" 실패:", e.message);
+        lastErr = e;
+        status.textContent = "다음 소스로 재시도…";
+      }
     }
+    throw lastErr || new Error("모든 소스 실패");
+  }
+
+  try{
+    let result;
+    if(currentTab === 'naver'){
+      result = await tryChain([
+        [scrapeNaverRanking, "네이버 실시간 랭킹"],
+        [aiList, "AI 수집"]
+      ]);
+    }else if(currentTab === 'etc'){
+      result = await tryChain([
+        [scrapeDaumRanking, "다음 랭킹"],
+        [fetchBingNews, "MSN·Bing 뉴스"],
+        [aiList, "AI 수집"]
+      ]);
+    }else{
+      result = await tryChain([
+        [fetchGoogleNews, "구글 뉴스 헤드라인"],
+        [aiList, "AI 수집"]
+      ]);
+    }
+    const parsed = result.parsed, method = result.method;
     const now = new Date();
     const stamp = now.getHours().toString().padStart(2,'0')+":"+now.getMinutes().toString().padStart(2,'0')+" 기준 · "+method;
     tabData[currentTab].articles = parsed;
@@ -584,7 +674,8 @@ async function writeArticle(){
     "[네이버 픽 최적화 규칙 — 반드시 적용]\n" +
     "제목: 25~35자. 핵심 검색 키워드(인물명·사안명)를 제목 앞쪽에 배치. 가장 강한 팩트나 발언을 따옴표 인용형(\"…\")으로 활용. 구체적 숫자가 있으면 제목에 넣기. 궁금증을 남기되 본문이 답을 주는 제목만 허용 — 본문과 무관한 낚시성 제목은 저품질 판정 위험이 있으므로 금지.\n" +
     "리드: 첫 문장에 가장 자극적인 팩트를 배치해 3초 안에 계속 읽게 만든다. 첫 두 문장 안에 육하원칙 핵심 완결.\n" +
-    "본문: 모바일 가독성 기준. 한 문단은 2~3문장으로 짧게 끊는다. 문단 구분은 줄바꿈 1회만 사용하고 빈 줄은 절대 넣지 않는다. 핵심 검색 키워드를 본문에 자연스럽게 3~5회 반복. 중간에 당사자·전문가 발언 인용으로 리듬을 만들고, 마지막 문단은 향후 전망이나 다음 관전 포인트로 끝내 체류시간을 늘린다.\n\n" +
+    "본문: 모바일 가독성 기준. 한 문단은 2~3문장으로 짧게 끊는다. 문단 구분은 줄바꿈 1회만 사용하고 빈 줄은 절대 넣지 않는다. 핵심 검색 키워드를 본문에 자연스럽게 3~5회 반복. 중간에 당사자·전문가 발언 인용으로 리듬을 만든다.\n" +
+    "마무리: 기사는 확인된 팩트로 끝낸다. '귀추가 주목된다', '관심이 쏠린다', '전망이다', '~할 것으로 보인다' 같은 상투적 추측·전망 표현으로 끝맺는 것을 절대 금지한다. 마지막 문단은 예정된 일정, 확정된 후속 절차, 당사자의 실제 발언 등 구체적 사실로 담백하게 마친다.\n\n" +
     "출력 형식(구분자를 정확히 지킬 것):\n" +
     "===제목후보===\n" +
     "1. 첫 번째 제목안\n" +
