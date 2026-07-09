@@ -776,6 +776,7 @@ function selectArticle(i){
   a.textContent = selected.url||"";
   a.href = selected.url||"#";
   document.getElementById('btnWrite').disabled = false;
+  document.getElementById('btnBroadcast').disabled = false;
   document.getElementById('output').classList.remove('show');
   document.getElementById('writeErr').innerHTML = "";
 }
@@ -1160,6 +1161,7 @@ function selectHot(i){
   a.textContent = selected.url||"";
   a.href = selected.url||"#";
   document.getElementById('btnWrite').disabled = false;
+  document.getElementById('btnBroadcast').disabled = false;
   document.getElementById('output').classList.remove('show');
   document.getElementById('writeErr').innerHTML = "";
 }
