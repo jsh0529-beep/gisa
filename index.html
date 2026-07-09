@@ -58,6 +58,11 @@
 
   .wrap{max-width:1180px;margin:0 auto;padding:20px 16px;display:grid;grid-template-columns:420px 1fr;gap:18px}
   @media(max-width:900px){.wrap{grid-template-columns:1fr}}
+  .leftcol{display:flex;flex-direction:column;gap:18px;min-width:0}
+  .srcbadge{font-family:var(--mono);font-size:9px;padding:1px 6px;border-radius:3px;border:1px solid var(--line);color:var(--ink-soft)}
+  .srcbadge.n{border-color:#1EC800;color:#149600}
+  .srcbadge.g{border-color:#4285F4;color:#2A66C8}
+  .srcbadge.e{border-color:#B9880F;color:#96700C}
 
   .panel{background:var(--surface);border:1px solid var(--line);border-radius:10px;overflow:hidden}
   .panel-head{padding:12px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px}
@@ -183,7 +188,8 @@
 
 <div class="wrap">
 
-  <!-- 왼쪽: 실시간 리스트 -->
+  <div class="leftcol">
+  <!-- 왼쪽 위: 소스별 리스트 -->
   <section class="panel">
     <div class="panel-head">
       <h2>지금 뜨는 기사</h2>
@@ -202,6 +208,22 @@
       <li class="empty"><b>이슈 불러오기</b>를 누르면<br>지금 화제가 되는 기사 10건을 수집합니다.<br><span style="font-size:11px">네이버·기타 탭은 포털의 실제 '많이 본 뉴스' 랭킹을<br>직접 가져옵니다 (API 비용 없음).</span></li>
     </ul>
   </section>
+
+  <!-- 왼쪽 아래: 3개 소스 통합 실시간 인기 TOP 10 -->
+  <section class="panel">
+    <div class="panel-head">
+      <h2>실시간 통합 인기 TOP 10</h2>
+      <span class="stamp" id="hotStamp">—</span>
+    </div>
+    <div class="toolbar">
+      <button class="btn" id="btnHot" onclick="loadHot()">통합 불러오기</button>
+      <span class="stamp" id="hotStatus">네이버 + 구글 + 기타 동시 수집</span>
+    </div>
+    <ul class="list" id="hotList" style="max-height:420px">
+      <li class="empty" style="padding:26px 20px">세 소스의 인기 기사를 한 번에 모아 보여줍니다.<br><span style="font-size:11px">전부 직접 수집이라 API 비용이 들지 않습니다.</span></li>
+    </ul>
+  </section>
+  </div><!-- /leftcol -->
 
   <!-- 오른쪽: 재구성 데스크 -->
   <section class="panel">
@@ -687,7 +709,8 @@ function selectArticle(i){
   selected = tabData[currentTab].articles[i];
   selectedTab = currentTab;
   selectedIndex = i;
-  document.querySelectorAll('.item').forEach((el,idx)=>el.classList.toggle('sel', idx===i));
+  document.querySelectorAll('#hotList .item').forEach(el=>el.classList.remove('sel'));
+  document.querySelectorAll('#list .item').forEach((el,idx)=>el.classList.toggle('sel', idx===i));
   document.getElementById('noSel').style.display = 'none';
   const box = document.getElementById('selbox');
   box.style.display = 'block';
@@ -889,6 +912,99 @@ function copyArticle(){
     c.textContent = "복사됨";
     setTimeout(()=>{ c.textContent=""; }, 2000);
   });
+}
+/* ---------- 통합 인기 TOP 10 (3개 소스 병렬 수집, API 비용 0원) ---------- */
+let hotArticles = [];
+
+async function loadHot(){
+  const btn = document.getElementById('btnHot');
+  const status = document.getElementById('hotStatus');
+  const ul = document.getElementById('hotList');
+  btn.disabled = true;
+  status.textContent = "3개 소스 동시 수집 중…";
+  ul.innerHTML = '<li class="empty" style="padding:26px 20px"><div class="loading" style="justify-content:center"><div class="spinner"></div>수집 중…</div></li>';
+
+  const etcChain = async ()=>{
+    try{ return await scrapeNateRanking(); }
+    catch(e){ try{ return await scrapeDaumRanking(); }
+    catch(e2){ return await fetchBingNews(); } }
+  };
+
+  const results = await Promise.allSettled([
+    scrapeNaverRanking(),
+    fetchGoogleNews(),
+    etcChain()
+  ]);
+  const srcs = [
+    {key:"n", label:"네이버", items: results[0].status==="fulfilled" ? results[0].value : []},
+    {key:"g", label:"구글",   items: results[1].status==="fulfilled" ? results[1].value : []},
+    {key:"e", label:"기타",   items: results[2].status==="fulfilled" ? results[2].value : []}
+  ];
+  const failed = srcs.filter(s=>!s.items.length).map(s=>s.label);
+
+  // 각 소스 상위 기사를 교차 배치하고 제목 중복 제거
+  hotArticles = [];
+  const seen = new Set();
+  for(let round=0; round<10 && hotArticles.length<10; round++){
+    for(const s of srcs){
+      if(hotArticles.length>=10) break;
+      const it = s.items[round];
+      if(!it) continue;
+      const key = it.title.replace(/\s+/g,"").slice(0,20);
+      if(seen.has(key)) continue;
+      seen.add(key);
+      hotArticles.push(Object.assign({}, it, {src:s.key, srcLabel:s.label}));
+    }
+  }
+
+  if(!hotArticles.length){
+    ul.innerHTML = '<li class="empty" style="padding:26px 20px">세 소스 모두 수집에 실패했습니다.<br><span style="font-size:11px">잠시 후 다시 시도해 주세요.</span></li>';
+    status.textContent = "";
+  }else{
+    renderHot();
+    const now = new Date();
+    document.getElementById('hotStamp').textContent =
+      now.getHours().toString().padStart(2,'0')+":"+now.getMinutes().toString().padStart(2,'0')+" 기준";
+    status.textContent = failed.length ? (failed.join("·")+" 제외") : "3개 소스 통합";
+  }
+  btn.disabled = false;
+}
+
+function renderHot(){
+  const ul = document.getElementById('hotList');
+  ul.innerHTML = "";
+  hotArticles.forEach((a,i)=>{
+    const li = document.createElement('li');
+    li.className = 'item';
+    li.onclick = ()=>selectHot(i);
+    li.innerHTML =
+      '<div class="rank">'+String(i+1).padStart(2,'0')+'</div>'+
+      '<div><div class="t"></div>'+
+      '<div class="m"><span class="srcbadge"></span><span class="outlet"></span><span class="time"></span></div></div>';
+    li.querySelector('.t').textContent = a.title||"";
+    const sb = li.querySelector('.srcbadge');
+    sb.textContent = a.srcLabel;
+    sb.classList.add(a.src);
+    li.querySelector('.outlet').textContent = a.outlet||"";
+    li.querySelector('.time').textContent = a.time||"";
+    ul.appendChild(li);
+  });
+}
+
+function selectHot(i){
+  selected = hotArticles[i];
+  selectedTab = null; selectedIndex = -1;
+  document.querySelectorAll('#list .item').forEach(el=>el.classList.remove('sel'));
+  document.querySelectorAll('#hotList .item').forEach((el,idx)=>el.classList.toggle('sel', idx===i));
+  document.getElementById('noSel').style.display = 'none';
+  document.getElementById('selbox').style.display = 'block';
+  document.getElementById('selTitle').textContent = selected.title;
+  const a = document.getElementById('selUrl');
+  a.textContent = selected.url||"";
+  a.href = selected.url||"#";
+  document.getElementById('btnWrite').disabled = false;
+  document.getElementById('output').classList.remove('show');
+  document.getElementById('writeErr').innerHTML = "";
 }
 </script>
 <footer class="guide">
