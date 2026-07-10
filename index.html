@@ -83,6 +83,14 @@
     font-size:11px;font-weight:600;color:var(--ink-soft);cursor:pointer;font-family:var(--sans)}
   .chip:hover{border-color:var(--ink-soft)}
   .chip.on{background:var(--ink);border-color:var(--ink);color:#fff}
+  #btnWrite,#btnBroadcast,#btnBlog,#btnSns,#btnImg{margin-bottom:6px}
+  @media(max-width:600px){
+    .chips{width:100%;order:3}
+    .toolbar .stamp{margin-left:auto}
+    #btnBroadcast,#btnBlog,#btnSns,#btnImg{margin-left:0;margin-right:6px}
+    .chip{padding:7px 12px;font-size:12px}
+    .item .m{row-gap:3px}
+  }
 
   .panel{background:var(--surface);border:1px solid var(--line);border-radius:10px;overflow:hidden}
   .panel-head{padding:12px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px}
@@ -98,7 +106,7 @@
   .tabs button.on{color:var(--ink);border-bottom-color:var(--hot)}
   .tabs button:focus-visible,button:focus-visible,select:focus-visible,textarea:focus-visible,input:focus-visible{outline:2px solid var(--hot);outline-offset:2px}
 
-  .toolbar{padding:10px 16px;display:flex;gap:8px;align-items:center;border-bottom:1px solid var(--line);background:#F7F9FA}
+  .toolbar{padding:10px 16px;display:flex;gap:8px;row-gap:8px;align-items:center;border-bottom:1px solid var(--line);background:#F7F9FA;flex-wrap:wrap}
   .btn{
     padding:8px 14px;border:1px solid var(--ink);background:var(--ink);color:#fff;
     border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--sans);
@@ -321,7 +329,7 @@
       <textarea class="facts" id="pressText" style="min-height:110px" oninput="updateWriteButtons()" placeholder="보도자료 전문을 여기 붙여넣으면 기사를 선택하지 않아도 보도자료를 바탕으로 기사·방송·블로그·SNS 글을 씁니다. 홍보성 표현은 걷어내고 언론 시각으로 재구성합니다."></textarea>
       <textarea class="facts" id="extraFacts" placeholder="(선택) 추가로 확보한 팩트·취재 내용·코멘트를 여기 붙여넣으면 기사에 반영합니다."></textarea>
 
-      <button class="btn hot" id="btnWrite" onclick="writeArticle()" disabled>새 기사 작성</button>
+      <button class="btn hot" id="btnWrite" onclick="writeArticle()" disabled style="margin-right:0">새 기사 작성</button>
       <button class="btn" id="btnBroadcast" onclick="writeArticle('broadcast')" disabled style="margin-left:6px">방송용 멘트 작성</button>
       <button class="btn" id="btnBlog" onclick="writeArticle('blog')" disabled style="margin-left:6px">블로그용 글 작성</button>
       <button class="btn" id="btnSns" onclick="writeArticle('sns')" disabled style="margin-left:6px">SNS용 글 작성</button>
