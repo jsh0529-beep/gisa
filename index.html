@@ -282,6 +282,7 @@
         <button class="chip" data-cat="스포츠" onclick="switchHotCat('스포츠')">스포츠</button>
         <button class="chip" data-cat="부동산" onclick="switchHotCat('부동산')">부동산</button>
         <button class="chip" data-cat="커뮤니티" onclick="switchHotCat('커뮤니티')">커뮤</button>
+        <button class="chip" data-cat="유튜브" onclick="switchHotCat('유튜브')">유튜브 소재</button>
       </div>
       <span class="stamp" id="hotStatus"></span>
     </div>
@@ -1802,6 +1803,65 @@ function isSameTopic(a, b){
   return inter / Math.min(ta.size, tb.size) >= 0.6;
 }
 
+/* ---------- 유튜브 뉴스 영상 소재 AI 선별 (수집된 풀에서 채점, 검색 없이 저비용) ---------- */
+async function youtubePicks(){
+  // 이미 수집된 전 카테고리 기사를 후보 풀로 구성
+  let pool = [];
+  ["종합","정치","경제","사회","연예","스포츠","부동산","커뮤니티"].forEach(c=>{
+    const h = hotCache[c];
+    if(h && h.articles) pool = pool.concat(h.articles);
+  });
+  // 풀이 부족하면 종합을 즉석 수집
+  if(pool.length < 15){
+    const r = await Promise.allSettled([ scrapeNaverRanking(), fetchGoogleNews(), etcChainFree() ]);
+    const srcs = [
+      {key:"n", label:"네이버", items: r[0].status==="fulfilled"?r[0].value:[]},
+      {key:"e", label:"기타", items: r[2].status==="fulfilled"?r[2].value:[]},
+      {key:"g", label:"구글", items: r[1].status==="fulfilled"?r[1].value:[]}
+    ];
+    pool = pool.concat(mergeSources(srcs, "종합"));
+  }
+  // 중복 제목 정리 후 최대 60건
+  const uniq = [];
+  for(const a of pool){
+    if(uniq.length >= 60) break;
+    if(uniq.some(u=>isSameTopic(u.title, a.title))) continue;
+    uniq.push(a);
+  }
+  if(uniq.length < 10) throw new Error("후보 기사가 부족합니다. 다른 카테고리를 먼저 불러온 뒤 시도하세요.");
+
+  const listStr = uniq.map((a,i)=>(i+1)+". "+a.title).join("\n");
+  const text = await callAI({
+    tier:'small', maxTokens:2000, searchUses:1,
+    system:"너는 구독자 수십만의 뉴스 유튜브 채널 콘텐츠 기획자다. 결과는 JSON 배열만 출력한다.",
+    user:
+      "아래 번호가 붙은 기사 목록에서 유튜브 뉴스 영상으로 만들면 조회수가 잘 나올 소재 10개를 골라라.\n" +
+      "[판단 기준]\n" +
+      "1) 시각 자료: 현장 영상, CCTV, 자료화면, 그래픽으로 보여줄 거리가 있는가\n" +
+      "2) 서사: 갈등, 반전, 인물이 있어 이야기 구조로 풀 수 있는가\n" +
+      "3) 감정: 분노·공감·놀라움 등 댓글과 공유를 부르는 반응이 있는가\n" +
+      "4) 검색 유입: 사람들이 검색할 인물명·사건명이 있는가\n" +
+      "5) 해설 수요: '이게 무슨 일인지 설명해줘' 수요가 있는 사안인가\n" +
+      "6) 지속성: 후속 보도가 이어져 시리즈가 가능한가\n" +
+      "7) 썸네일: 한 장의 이미지와 한 줄 문구로 표현 가능한가\n" +
+      "출력: JSON 배열만, 코드블록·설명 금지. [{\"i\":기사번호,\"reason\":\"선정 이유 25자 이내\",\"format\":\"현장형|해설형|정리형|썰전형\",\"thumb\":\"추천 썸네일 문구 15자 이내\"}] 정확히 10개, 잠재력 높은 순.\n" +
+      "[기사 목록]\n" + listStr
+  });
+  const picks = parseJsonArray(text);
+  const out = picks.map(p=>{
+    const src = uniq[(p.i|0)-1];
+    if(!src) return null;
+    return Object.assign({}, src, {
+      src:"e", srcLabel:"YT",
+      category: p.format || "유튜브",
+      potential: "높음",
+      summary: (p.reason||"") + (p.thumb ? "  |  썸네일: " + p.thumb : "")
+    });
+  }).filter(Boolean).slice(0,10);
+  if(!out.length) throw new Error("선별 결과 해석 실패 — 다시 시도해 주세요.");
+  return out;
+}
+
 // 여러 소스 상위 기사를 교차 배치하고 같은 주제 중복 제거
 function mergeSources(srcs, cat){
   const out = [];
@@ -1825,6 +1885,25 @@ async function loadHot(force){
   btn.disabled = true;
   status.textContent = "수집 중…";
   ul.innerHTML = '<li class="empty" style="padding:26px 20px"><div class="loading" style="justify-content:center"><div class="spinner"></div>'+cat+' 인기 기사 수집 중…</div></li>';
+
+  if(cat === "유튜브"){
+    try{
+      status.textContent = "AI가 영상 소재를 선별 중… (약 1~2센트)";
+      hotArticles = await youtubePicks();
+      renderHot();
+      const now = new Date();
+      const stamp = now.getHours().toString().padStart(2,'0')+":"+now.getMinutes().toString().padStart(2,'0')+" 기준 · AI 선별";
+      document.getElementById('hotStamp').textContent = stamp;
+      status.textContent = "";
+      hotCache["유튜브"] = {articles: hotArticles, stamp, statusText:""};
+    }catch(err){
+      console.error(err);
+      ul.innerHTML = '<li class="empty" style="padding:26px 20px">선별에 실패했습니다.<br><span style="font-size:11px">'+err.message+'</span></li>';
+      status.textContent = "";
+    }
+    btn.disabled = false;
+    return;
+  }
 
   let srcs;
   if(cat === "종합"){
@@ -1875,7 +1954,14 @@ function renderHot(){
     li.innerHTML =
       '<div class="rank">'+String(i+1).padStart(2,'0')+'</div>'+
       '<div><div class="t"></div>'+
-      '<div class="m"><span class="srcbadge"></span><span class="outlet"></span><span class="time"></span></div></div>';
+      '<div class="m"><span class="srcbadge"></span><span class="cat2"></span><span class="outlet"></span><span class="time"></span></div>'+
+      '<div class="s"></div></div>';
+    if(a.summary) li.querySelector('.s').textContent = a.summary;
+    if(hotCat === "유튜브" && a.category){
+      const c2 = li.querySelector('.cat2');
+      c2.textContent = a.category;
+      c2.className = 'cat';
+    }
     li.querySelector('.t').textContent = a.title||"";
     const sb = li.querySelector('.srcbadge');
     sb.textContent = a.srcLabel;
