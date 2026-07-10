@@ -78,7 +78,7 @@
   .srcbadge.n{border-color:#1EC800;color:#149600}
   .srcbadge.g{border-color:#4285F4;color:#2A66C8}
   .srcbadge.e{border-color:#B9880F;color:#96700C}
-  .chips{display:flex;gap:4px}
+  .chips{display:flex;gap:4px;flex-wrap:wrap}
   .chip{padding:5px 10px;border:1px solid var(--line);background:#fff;border-radius:14px;
     font-size:11px;font-weight:600;color:var(--ink-soft);cursor:pointer;font-family:var(--sans)}
   .chip:hover{border-color:var(--ink-soft)}
@@ -265,6 +265,8 @@
         <button class="chip" data-cat="정치" onclick="switchHotCat('정치')">정치</button>
         <button class="chip" data-cat="경제" onclick="switchHotCat('경제')">경제</button>
         <button class="chip" data-cat="사회" onclick="switchHotCat('사회')">사회</button>
+        <button class="chip" data-cat="연예" onclick="switchHotCat('연예')">연예</button>
+        <button class="chip" data-cat="스포츠" onclick="switchHotCat('스포츠')">스포츠</button>
         <button class="chip" data-cat="부동산" onclick="switchHotCat('부동산')">부동산</button>
         <button class="chip" data-cat="커뮤니티" onclick="switchHotCat('커뮤니티')">커뮤</button>
       </div>
@@ -1625,7 +1627,9 @@ const hotCache = {};  // {카테고리: {articles, stamp, statusText}}
 const HOT_CATS = {
   "정치": {nate:"pol", topic:"POLITICS"},
   "경제": {nate:"eco", topic:"BUSINESS"},
-  "사회": {nate:"soc", topic:"NATION"}
+  "사회": {nate:"soc", topic:"NATION"},
+  "연예": {nate:"ent", topic:"ENTERTAINMENT"},
+  "스포츠": {nate:"spo", topic:"SPORTS"}
 };
 
 function switchHotCat(cat){
