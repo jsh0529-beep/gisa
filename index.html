@@ -85,6 +85,11 @@
   .chip:hover{border-color:var(--ink-soft)}
   .chip.on{background:var(--ink);border-color:var(--ink);color:#fff}
   #btnWrite,#btnBroadcast,#btnBlog,#btnSns,#btnImg{margin-bottom:6px}
+  .factchk{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-soft);font-weight:600;margin-top:4px;cursor:pointer}
+  .factchk input{accent-color:var(--hot)}
+  .qc .fact-ok{background:#E4F3EB;color:var(--ok)}
+  .qc .fact-warn{background:#FDEEED;color:#8E1B15;border:1px solid #F2C2BF}
+  .qc .fact-busy{background:#EEF1F4;color:var(--ink-soft)}
   @media(max-width:600px){
     .chips{width:100%;order:3}
     .toolbar .stamp{margin-left:auto}
@@ -345,6 +350,7 @@
       <button class="btn" id="btnBlog" onclick="writeArticle('blog')" disabled style="margin-left:6px">블로그용 글 작성</button>
       <button class="btn" id="btnSns" onclick="writeArticle('sns')" disabled style="margin-left:6px">SNS용 글 작성</button>
       <button class="btn" id="btnImg" onclick="generateArticleImage()" disabled style="margin-left:6px">기사 이미지 생성</button>
+      <label class="factchk"><input type="checkbox" id="factCheckOn" checked> 작성 후 팩트 재검증 (건당 약 1~3센트)</label>
 
       <div class="loading" id="writeLoading" style="display:none">
         <div class="spinner"></div><span id="writeStep">복수 출처에서 팩트를 확인하는 중…</span>
@@ -1257,6 +1263,7 @@ async function writeArticle(mode){
     renderArticle(text, mode);
     runQC(mode, len);
     saveHistory(mode, text, len);
+    verifyFacts(mode); // 비동기 — 검수 배지에 결과 추가
     document.getElementById('btnImg').disabled = false;
     document.getElementById('imgArea').style.display = 'none';
     document.getElementById('imgErr').innerHTML = "";
@@ -1433,6 +1440,56 @@ function runQC(mode, lenChoice){
   okS.textContent = issues.length ? n.toLocaleString()+"자" : "✓ 자동 검수 통과 · "+n.toLocaleString()+"자";
   box.insertBefore(okS, box.firstChild);
   box.style.display = 'flex';
+}
+
+/* ---------- 팩트 재검증 (저가 모델, 작성 직후 자동) ---------- */
+async function verifyFacts(mode){
+  if(!document.getElementById('factCheckOn').checked) return;
+  if(mode === 'sns') return; // SNS는 원기사에서 파생되므로 생략
+  const box = document.getElementById('qcBox');
+  const busy = document.createElement('span');
+  busy.className = 'fact-busy';
+  busy.textContent = "⏳ 팩트 재검증 중…";
+  box.appendChild(busy);
+  box.style.display = 'flex';
+
+  const pressSrc = (document.getElementById('pressText').value||"").trim();
+  const srcDesc = pressSrc.length >= 50
+    ? "아래 소스 자료와 대조하고, 소스에 없는 항목은 웹 검색으로 확인하라.\n===소스===\n" + pressSrc.slice(0,5000) + "\n===소스 끝==="
+    : (selected ? "이슈 '"+selected.title+"'에 대한 웹 검색으로 확인하라." + (selected.url ? " 참고 URL: "+selected.url : "") : "웹 검색으로 확인하라.");
+
+  try{
+    const text = await callAI({
+      tier:'small', maxTokens:1200, searchUses:2,
+      system:"너는 언론사의 팩트체커다. 결과는 JSON 배열만 출력한다.",
+      user:
+        "아래 기사에서 검증 가능한 핵심 팩트(수치, 일시, 인명, 직함, 기관명, 발언 내용)를 뽑아 정확한지 검증하라. " + srcDesc + "\n" +
+        "검증 기준: 숫자와 단위(억/조, %/%p), 날짜, 인물의 직함과 소속, 발언의 취지가 원출처와 일치하는가. " +
+        "출력: 문제가 있는 항목만 JSON 배열로. [{\"item\":\"문제 항목 20자 이내\",\"why\":\"불일치 사유 25자 이내\"}] 문제가 하나도 없으면 빈 배열 []만 출력. 코드블록·설명 금지.\n" +
+        "확실하지 않은 것을 문제로 단정하지 마라. 명백한 불일치만 보고하라.\n" +
+        "===기사===\n" + articleRaw.slice(0,5000) + "\n===기사 끝===",
+    });
+    busy.remove();
+    let issues = [];
+    try{ issues = parseJsonArray(text); }catch(e){ issues = []; }
+    if(Array.isArray(issues) && issues.length){
+      issues.slice(0,5).forEach(it=>{
+        const s = document.createElement('span');
+        s.className = 'fact-warn';
+        s.textContent = "🔴 팩트 확인 필요: " + (it.item||"") + (it.why ? " — "+it.why : "");
+        box.appendChild(s);
+      });
+    }else{
+      const s = document.createElement('span');
+      s.className = 'fact-ok';
+      s.textContent = "✓ 팩트 재검증 통과";
+      box.appendChild(s);
+    }
+  }catch(err){
+    console.warn("팩트 재검증 실패:", err.message);
+    busy.textContent = "팩트 재검증 실패 (수동 확인 필요)";
+    busy.className = 'fact-warn';
+  }
 }
 
 /* ---------- 작성 이력 (이번 세션) ---------- */
