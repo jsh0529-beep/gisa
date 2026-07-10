@@ -254,6 +254,7 @@
       <button id="tabNaver" class="on" onclick="switchTab('naver')">NAVER</button>
       <button id="tabGoogle" onclick="switchTab('google')">GOOGLE</button>
       <button id="tabEtc" onclick="switchTab('etc')">기타 (다음·MSN)</button>
+      <button id="tabFlash" onclick="switchTab('flash')">속보/단독</button>
     </div>
     <div class="toolbar">
       <button class="btn" id="btnLoad" onclick="loadTrending()">이슈 불러오기</button>
@@ -387,8 +388,8 @@
 
 <script>
 let currentTab = 'naver';
-const tabData = { naver:{articles:[], stamp:""}, google:{articles:[], stamp:""}, etc:{articles:[], stamp:""} };
-const tabLabel = { naver:"네이버 많이 본 뉴스", google:"구글", etc:"네이트·다음·MSN 랭킹" };
+const tabData = { naver:{articles:[], stamp:""}, google:{articles:[], stamp:""}, etc:{articles:[], stamp:""}, flash:{articles:[], stamp:""} };
+const tabLabel = { naver:"네이버 많이 본 뉴스", google:"구글", etc:"네이트·다음·MSN 랭킹", flash:"속보·단독" };
 let selected = null, selectedTab = null, selectedIndex = -1;
 
 /* ---------- AI 공급자 + API 키 관리 (이 브라우저에만 저장) ---------- */
@@ -604,13 +605,14 @@ function parseJsonArray(text){
 }
 
 /* ---------- 화제 기사 수집 ---------- */
-const tabLoading = {naver:false, google:false, etc:false};
+const tabLoading = {naver:false, google:false, etc:false, flash:false};
 
 function switchTab(tab){
   currentTab = tab;
   document.getElementById('tabNaver').classList.toggle('on', tab==='naver');
   document.getElementById('tabGoogle').classList.toggle('on', tab==='google');
   document.getElementById('tabEtc').classList.toggle('on', tab==='etc');
+  document.getElementById('tabFlash').classList.toggle('on', tab==='flash');
   const d = tabData[tab];
   if(d.articles.length){
     renderList();
@@ -636,6 +638,7 @@ async function freeLoadTab(tab){
     let arts;
     if(tab==='naver') arts = await scrapeNaverRanking();
     else if(tab==='google') arts = await fetchGoogleNews();
+    else if(tab==='flash') arts = await flashArticles();
     else arts = await etcChainFree();
     const now = new Date();
     const stamp = now.getHours().toString().padStart(2,'0')+":"+now.getMinutes().toString().padStart(2,'0')+" 기준 · 자동";
@@ -905,7 +908,8 @@ async function loadTrending(){
   const aiSource = {
     naver: "네이버 뉴스 '많이 본 뉴스' 랭킹과 네이버 픽에서 조회수가 폭발할 잠재력이 있는 이슈",
     google: "구글 뉴스와 구글 트렌드 기준 검색량 급상승 화제 기사",
-    etc: "다음(Daum) 뉴스 랭킹, MSN 뉴스 등 포털 랭킹 기준 많이 본 기사"
+    etc: "다음(Daum) 뉴스 랭킹, MSN 뉴스 등 포털 랭킹 기준 많이 본 기사",
+    flash: "최근 1~2시간 내 속보와 제목에 [단독]이 붙은 단독 보도"
   }[currentTab];
 
   // AI 폴백: 저가 모델 + 검색 2회 제한으로 비용 최소화 (선택된 AI 사용)
@@ -942,6 +946,11 @@ async function loadTrending(){
     if(currentTab === 'naver'){
       result = await tryChain([
         [scrapeNaverRanking, "네이버 실시간 랭킹"],
+        [aiList, "AI 수집"]
+      ]);
+    }else if(currentTab === 'flash'){
+      result = await tryChain([
+        [flashArticles, "속보·단독 실시간"],
         [aiList, "AI 수집"]
       ]);
     }else if(currentTab === 'etc'){
@@ -1712,6 +1721,45 @@ async function communitySrcs(){
   ];
 }
 
+// 네이버 속보 리스트 (SSR 페이지 직접 수집)
+async function scrapeNaverBreaking(){
+  const doc = await fetchDoc("https://news.naver.com/main/list.naver?mode=LSD&mid=sec&sid1=001");
+  const out = [], seen = new Set();
+  doc.querySelectorAll("a").forEach(a=>{
+    if(out.length>=10) return;
+    const href = a.getAttribute("href")||"";
+    if(!/n\.news\.naver\.com\/(mnews\/)?article|news\.naver\.com\/main\/read/.test(href)) return;
+    const t = cleanTitle(a.textContent);
+    if(t.length < 10 || seen.has(t)) return;
+    if(/동영상기사|포토|본문 내용|TV플레이어/.test(t)) return;
+    seen.add(t);
+    out.push({title:t, outlet:"", url: href.startsWith("/")?"https://news.naver.com"+href:href,
+      time:"속보", category:"속보", summary:"", potential: out.length<3?"높음":"중간"});
+  });
+  if(out.length < 3) throw new Error("네이버 속보 파싱 실패");
+  return out;
+}
+
+// [단독] 기사 (구글 뉴스 검색 RSS, 최신순)
+async function fetchDandok(){
+  const arts = await fetchGoogleFeed(gnSearchUrl('"단독"'), "단독");
+  const only = arts.filter(a=>/단독/.test(a.title));
+  if(only.length < 2) throw new Error("단독 기사 수집 실패");
+  return only.map(a=>Object.assign({}, a, {category:"단독"}));
+}
+
+// 속보 + 단독 교차 병합 (개별 카테고리 유지를 위해 '종합' 모드로 병합)
+async function flashArticles(){
+  const r = await Promise.allSettled([ scrapeNaverBreaking(), fetchDandok() ]);
+  const srcs = [
+    {key:"n", label:"속보", items: r[0].status==="fulfilled" ? r[0].value : []},
+    {key:"g", label:"단독", items: r[1].status==="fulfilled" ? r[1].value : []}
+  ];
+  const merged = mergeSources(srcs, "종합");
+  if(!merged.length) throw new Error("속보·단독 수집 실패");
+  return merged;
+}
+
 // 기타 소스 체인: 네이트 → 다음 → Bing (전부 무료)
 async function etcChainFree(){
   try{ return await scrapeNateRanking("all"); }
@@ -1876,7 +1924,7 @@ function saveSessionCache(){
   try{
     sessionStorage.setItem('md_cache', JSON.stringify({
       t: Date.now(),
-      tabs: {naver:tabData.naver, google:tabData.google, etc:tabData.etc},
+      tabs: {naver:tabData.naver, google:tabData.google, etc:tabData.etc, flash:tabData.flash},
       hot: hotCache
     }));
   }catch(e){}
@@ -1886,7 +1934,7 @@ function loadSessionCache(){
     const c = JSON.parse(sessionStorage.getItem('md_cache')||"null");
     if(!c || Date.now()-c.t > 5*60*1000) return false;
     let any = false;
-    ['naver','google','etc'].forEach(k=>{
+    ['naver','google','etc','flash'].forEach(k=>{
       if(c.tabs && c.tabs[k] && c.tabs[k].articles && c.tabs[k].articles.length){ tabData[k]=c.tabs[k]; any=true; }
     });
     Object.assign(hotCache, c.hot||{});
@@ -1927,9 +1975,11 @@ async function preloadAll(){
   const pNaver = scrapeNaverRanking().catch(()=>[]);
   const pGoogle = fetchGoogleNews().catch(()=>fetchGoogleNews()).catch(()=>[]);
   const pEtc = etcChainFree().catch(()=>[]);
+  const pFlash = flashArticles().catch(()=>[]);
   pNaver.then(a=>applyTab('naver', a));
   pGoogle.then(a=>applyTab('google', a));
   pEtc.then(a=>applyTab('etc', a));
+  pFlash.then(a=>applyTab('flash', a));
 
   const catTasks = Object.entries(HOT_CATS).map(([cat, conf], i)=>(async ()=>{
     await new Promise(res=>setTimeout(res, i*300)); // 살짝만 시차
