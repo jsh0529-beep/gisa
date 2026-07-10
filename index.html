@@ -321,6 +321,7 @@
       <button class="btn" id="btnBroadcast" onclick="writeArticle('broadcast')" disabled style="margin-left:6px">방송용 멘트 작성</button>
       <button class="btn" id="btnBlog" onclick="writeArticle('blog')" disabled style="margin-left:6px">블로그용 글 작성</button>
       <button class="btn" id="btnSns" onclick="writeArticle('sns')" disabled style="margin-left:6px">SNS용 글 작성</button>
+      <button class="btn" id="btnImg" onclick="generateArticleImage()" disabled style="margin-left:6px">기사 이미지 생성</button>
 
       <div class="loading" id="writeLoading" style="display:none">
         <div class="spinner"></div><span id="writeStep">복수 출처에서 팩트를 확인하는 중…</span>
@@ -339,6 +340,18 @@
         <div class="cands" id="subCands" data-label="부제 후보 — 클릭하면 복사" style="display:none"></div>
         <div class="article" id="articleBody"></div>
         <div class="srcline" id="srcLine" style="display:none"></div>
+        <div class="loading" id="imgLoading" style="display:none">
+          <div class="spinner"></div><span>기사 이미지를 생성하는 중… (10~30초)</span>
+        </div>
+        <div id="imgErr"></div>
+        <div id="imgArea" style="display:none;margin-top:14px">
+          <img id="genImg" alt="기사 이미지" style="width:100%;border-radius:8px;border:1px solid var(--line);display:block">
+          <div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <button class="btn ghost" style="padding:6px 12px;font-size:12px" onclick="downloadImage()">4K PNG 다운로드 (3840×2160)</button>
+            <button class="btn ghost" style="padding:6px 12px;font-size:12px" onclick="generateArticleImage()">다시 생성</button>
+            <span class="stamp" id="imgInfo"></span>
+          </div>
+        </div>
         <p class="note">※ 복사 버튼은 기사 본문만 담습니다(제목·부제 후보, 출처 제외, 빈 줄 없음). 제목·부제 후보는 클릭하면 개별 복사됩니다. 수치·발언·일시는 송고 전 반드시 원출처 대조 확인하세요.</p>
       </div>
 
@@ -1109,6 +1122,9 @@ async function writeArticle(mode){
     renderArticle(text, mode);
     runQC(mode, len);
     saveHistory(mode, text, len);
+    document.getElementById('btnImg').disabled = false;
+    document.getElementById('imgArea').style.display = 'none';
+    document.getElementById('imgErr').innerHTML = "";
     output.classList.add('show');
     document.getElementById('copied').textContent = "";
   }catch(err){
@@ -1326,9 +1342,139 @@ function openHistory(i){
   articleRaw = h.raw;
   renderArticle(h.raw, h.mode);
   runQC(h.mode, h.len);
+  document.getElementById('btnImg').disabled = false;
+  document.getElementById('imgArea').style.display = 'none';
+  document.getElementById('imgErr').innerHTML = "";
   document.getElementById('output').classList.add('show');
   document.getElementById('copied').textContent = "";
   document.getElementById('output').scrollIntoView({behavior:'smooth', block:'start'});
+}
+
+/* ---------- 기사 이미지 생성 (ChatGPT 또는 Gemini 키 사용) ---------- */
+let lastImgB64 = "", lastImgMime = "image/png";
+
+function pickImageProvider(){
+  const cur = getProviderId();
+  if(cur !== 'claude' && getKeyFor(cur)) return cur;
+  if(getKeyFor('gemini')) return 'gemini';
+  if(getKeyFor('openai')) return 'openai';
+  return null;
+}
+
+function buildImagePrompt(){
+  const title = (articleRaw||"").split("\n")[0] || (selected ? selected.title : "");
+  const lead = (articleRaw||"").split("\n").slice(1,4).join(" ").slice(0,200);
+  return "한국 뉴스 기사에 실을 대표 이미지를 만들어라.\n기사 제목: \"" + title + "\"\n기사 요지: " + lead + "\n" +
+    "스타일: 실제 보도사진처럼 보이는 사실적인 고해상도 연출 사진. 전문 사진기자가 촬영한 듯한 자연스러운 구도와 조명, 얕은 심도, 현장감 있는 디테일. 기사 주제와 직접 연관된 장소·사물·상황을 담을 것 (예: 부동산 기사면 아파트 단지 전경, 경제 기사면 관련 산업 현장).\n" +
+    "인물 처리: 실존 인물의 식별 가능한 얼굴은 절대 넣지 말 것. 사람이 필요하면 뒷모습, 실루엣, 원거리, 손·상반신 일부 등 신원을 알 수 없는 방식으로만 표현.\n" +
+    "금지: 인위적인 자막·문구·로고·워터마크 넣지 말 것. 폭력적이거나 자극적인 묘사 금지. 특정 기업 브랜드가 주인공처럼 부각되지 않게 할 것.\n" +
+    "형식: 16:9 가로 구도, 4K급 선명도.";
+}
+
+async function generateArticleImage(){
+  if(!articleRaw){ alert("먼저 기사를 작성하세요."); return; }
+  const prov = pickImageProvider();
+  const errBox = document.getElementById('imgErr');
+  errBox.innerHTML = "";
+  if(!prov){
+    errBox.innerHTML = '<div class="err">이미지 생성은 ChatGPT 또는 Gemini 키가 필요합니다 (Claude는 이미지 생성을 지원하지 않습니다). 상단에서 해당 AI 키를 등록해 주세요.</div>';
+    return;
+  }
+  const btn = document.getElementById('btnImg');
+  const loading = document.getElementById('imgLoading');
+  const area = document.getElementById('imgArea');
+  btn.disabled = true;
+  loading.style.display = 'flex';
+  area.style.display = 'none';
+  const prompt = buildImagePrompt();
+
+  try{
+    if(prov === 'gemini'){
+      const key = getKeyFor('gemini');
+      const res = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key="+encodeURIComponent(key),{
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+          contents:[{role:"user",parts:[{text:prompt}]}],
+          generationConfig:{responseModalities:["IMAGE"]}
+        })
+      });
+      if(!res.ok) throw await apiError(res, "Gemini 이미지");
+      const data = await res.json();
+      const parts = (((data.candidates||[])[0]||{}).content||{}).parts || [];
+      const imgPart = parts.find(p=>p.inlineData && p.inlineData.data);
+      if(!imgPart) throw new Error("Gemini가 이미지를 반환하지 않았습니다. 다시 시도해 주세요.");
+      lastImgB64 = imgPart.inlineData.data;
+      lastImgMime = imgPart.inlineData.mimeType || "image/png";
+    }else{
+      const key = getKeyFor('openai');
+      let data = null;
+      // 1차: gpt-image-1 → 실패 시 dall-e-3
+      let res = await fetch("https://api.openai.com/v1/images/generations",{
+        method:"POST", headers:{"Content-Type":"application/json","Authorization":"Bearer "+key},
+        body:JSON.stringify({model:"gpt-image-1", prompt, size:"1536x1024", quality:"high"})
+      });
+      if(res.ok){ data = await res.json(); }
+      else{
+        res = await fetch("https://api.openai.com/v1/images/generations",{
+          method:"POST", headers:{"Content-Type":"application/json","Authorization":"Bearer "+key},
+          body:JSON.stringify({model:"dall-e-3", prompt, size:"1792x1024", quality:"hd", response_format:"b64_json"})
+        });
+        if(!res.ok) throw await apiError(res, "ChatGPT 이미지");
+        data = await res.json();
+      }
+      const b64 = data.data && data.data[0] && data.data[0].b64_json;
+      if(!b64) throw new Error("이미지 데이터를 받지 못했습니다.");
+      lastImgB64 = b64;
+      lastImgMime = "image/png";
+    }
+    const img = document.getElementById('genImg');
+    img.src = "data:"+lastImgMime+";base64,"+lastImgB64;
+    document.getElementById('imgInfo').textContent = (prov==='gemini'?"Gemini":"ChatGPT")+" 생성 · 다운로드 시 4K로 변환";
+    area.style.display = 'block';
+  }catch(err){
+    console.error(err);
+    errBox.innerHTML = '<div class="err">이미지 생성 실패: '+err.message+'</div>';
+  }finally{
+    loading.style.display = 'none';
+    btn.disabled = false;
+  }
+}
+
+function downloadImage(){
+  if(!lastImgB64) return;
+  const src = new Image();
+  src.onload = ()=>{
+    const W = 3840, H = 2160;
+    const canvas = document.createElement('canvas');
+    canvas.width = W; canvas.height = H;
+    const ctx = canvas.getContext('2d');
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    // 16:9로 커버 크롭
+    const sRatio = src.width / src.height, tRatio = W / H;
+    let sx=0, sy=0, sw=src.width, sh=src.height;
+    if(sRatio > tRatio){ sw = src.height * tRatio; sx = (src.width - sw)/2; }
+    else{ sh = src.width / tRatio; sy = (src.height - sh)/2; }
+    ctx.drawImage(src, sx, sy, sw, sh, 0, 0, W, H);
+    // 우하단 'AI 생성 이미지' 표기 자동 삽입
+    ctx.font = "600 54px 'Apple SD Gothic Neo','Malgun Gothic',sans-serif";
+    const label = "AI 생성 이미지";
+    const tw = ctx.measureText(label).width;
+    const pad = 28, mx = 48, my = 44;
+    ctx.fillStyle = "rgba(0,0,0,0.45)";
+    ctx.fillRect(W - tw - pad*2 - mx, H - 54 - pad*2 - my + 10, tw + pad*2, 54 + pad*1.4);
+    ctx.fillStyle = "rgba(255,255,255,0.92)";
+    ctx.textBaseline = "top";
+    ctx.fillText(label, W - tw - pad - mx, H - 54 - pad - my + 14);
+    canvas.toBlob((blob)=>{
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = "article-image-4k.png";
+      a.click();
+      setTimeout(()=>URL.revokeObjectURL(a.href), 5000);
+    }, "image/png");
+  };
+  src.src = "data:"+lastImgMime+";base64,"+lastImgB64;
 }
 
 function copyArticle(){
