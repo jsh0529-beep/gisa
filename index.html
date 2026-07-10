@@ -154,6 +154,8 @@
     padding:7px 10px;border:1px solid var(--line);border-radius:6px;font-size:13px;
     background:#fff;font-family:var(--sans);min-width:150px;
   }
+  .urlrow{display:flex;gap:6px;margin-bottom:8px}
+  .urlrow input{flex:1;padding:8px 10px;border:1px solid var(--line);border-radius:6px;font-size:13px;font-family:var(--sans);min-width:0}
   .facts{width:100%;min-height:70px;border:1px solid var(--line);border-radius:6px;padding:10px;
     font-size:13px;font-family:var(--sans);resize:vertical;margin-bottom:12px;line-height:1.5}
 
@@ -328,6 +330,11 @@
         </label>
       </div>
 
+      <div class="urlrow">
+        <input type="url" id="urlInput" placeholder="기사 링크(URL)를 붙여넣고 '가져오기' — 본문을 긁어와 아래 칸에 채웁니다">
+        <button class="btn ghost" id="btnFetchUrl" onclick="fetchArticleFromUrl()">가져오기</button>
+      </div>
+      <div id="urlStatus" class="stamp" style="margin-bottom:8px;display:none"></div>
       <textarea class="facts" id="pressText" style="min-height:110px" oninput="updateWriteButtons()" placeholder="보도자료 전문을 여기 붙여넣으면 기사를 선택하지 않아도 보도자료를 바탕으로 기사·방송·블로그·SNS 글을 씁니다. 홍보성 표현은 걷어내고 언론 시각으로 재구성합니다."></textarea>
       <textarea class="facts" id="extraFacts" placeholder="(선택) 추가로 확보한 팩트·취재 내용·코멘트를 여기 붙여넣으면 기사에 반영합니다."></textarea>
 
@@ -1008,6 +1015,8 @@ function selectArticle(i){
   a.textContent = selected.url||"";
   a.href = selected.url||"#";
   document.getElementById('pressText').value = "";  // 기사 선택 시 보도자료 모드 해제
+  document.getElementById('urlInput').value = "";
+  document.getElementById('urlStatus').style.display = 'none';
   document.getElementById('btnWrite').disabled = false;
   document.getElementById('btnBroadcast').disabled = false;
   document.getElementById('btnBlog').disabled = false;
@@ -1023,6 +1032,50 @@ const PRESS_STYLES = {
   "동아일보": "정제되고 균형 잡힌 정통 신문 문체. 육하원칙에 충실한 역피라미드 구조를 안정적으로 지키고 감정적 수사와 과장을 절제한다. 양쪽 입장이 있는 사안은 반론이나 상대 입장을 반드시 한 문단 배치한다. 표준적이고 품위 있는 문어체 어휘를 쓴다.",
   "뉴욕타임즈": "뉴욕타임스식 내러티브 저널리즘을 한국어로 구현한 문체. 리드는 육하원칙 요약 대신 구체적 장면·인물·일화로 시작해 독자를 끌어들이고, 3~4문단째에 사안의 핵심과 의미를 정리하는 문단(넛 그래프)을 배치한다. 인용은 발언자의 상황과 맥락 묘사와 함께 쓴다. 문장 호흡이 길고 서사적이며 사안을 더 큰 흐름 속에서 조망한다."
 };
+
+/* ---------- 기사 링크 → 본문 긁어오기 (무료 중계 서버 사용) ---------- */
+async function fetchArticleFromUrl(){
+  const input = document.getElementById('urlInput');
+  const btn = document.getElementById('btnFetchUrl');
+  const status = document.getElementById('urlStatus');
+  const url = (input.value||"").trim();
+  if(!/^https?:\/\//.test(url)){ alert("http로 시작하는 기사 주소를 붙여넣어 주세요."); return; }
+  btn.disabled = true;
+  status.style.display = 'block';
+  status.textContent = "기사 본문을 가져오는 중…";
+  try{
+    const doc = await fetchDoc(url);
+    doc.querySelectorAll("script,style,noscript,iframe,header,footer,nav,aside,form").forEach(e=>e.remove());
+    const title = ((doc.querySelector("meta[property='og:title']")||{}).getAttribute
+      ? (doc.querySelector("meta[property='og:title']").getAttribute("content")||"") : "") || doc.title || "";
+    // 국내 주요 언론·포털 본문 셀렉터 우선 시도
+    const sels = ["#dic_area","#newsct_article","#articleBodyContents",".article_view","#article-view-content-div",
+                  "[itemprop='articleBody']",".article_body",".news_body","#articleBody",".article-body","article"];
+    let body = "";
+    for(const s of sels){
+      const el = doc.querySelector(s);
+      if(el){
+        const t = el.textContent||"";
+        if(t.replace(/\s/g,"").length > 300){ body = t; break; }
+      }
+    }
+    if(body.replace(/\s/g,"").length < 300){
+      // 폴백: 긴 문단들 수집
+      body = Array.from(doc.querySelectorAll("p")).map(p=>(p.textContent||"").trim()).filter(t=>t.length>30).join("\n");
+    }
+    body = body.replace(/[ \t]{2,}/g," ").replace(/\n{2,}/g,"\n").trim().slice(0, 6000);
+    if(body.replace(/\s/g,"").length < 200) throw new Error("본문 추출 실패 — 이 사이트는 자동 수집이 막혀 있을 수 있습니다. 본문을 직접 복사해 아래 칸에 붙여넣어 주세요.");
+    document.getElementById('pressText').value =
+      "[원문 기사 링크: " + url + "]\n제목: " + title.trim() + "\n\n" + body;
+    updateWriteButtons();
+    status.textContent = "가져오기 완료 — 아래 칸에서 확인·수정 후 작성 버튼을 누르세요 ("+body.length.toLocaleString()+"자)";
+  }catch(err){
+    console.error(err);
+    status.textContent = "실패: " + err.message;
+  }finally{
+    btn.disabled = false;
+  }
+}
 
 // 기사 선택 또는 보도자료 입력 여부에 따라 작성 버튼 활성화
 function updateWriteButtons(){
@@ -1157,7 +1210,7 @@ async function writeArticle(mode){
     ({article:"다음 이슈에 대한 새 기사를 작성하라.\n", blog:"다음 이슈에 대한 네이버 블로그 글을 작성하라.\n", sns:"다음 이슈에 대한 Threads·페이스북 겸용 SNS 글을 작성하라.\n", broadcast:"다음 이슈에 대한 방송 뉴스 원고(앵커 멘트 + 기자 리포트)를 작성하라.\n"})[mode] +
     "필수: 본문에는 반드시 날짜가 들어가야 하지만, 절대 문장 맨 앞에 기계적으로 붙이지 마라. 노련한 기자처럼 리드 문장의 흐름 속에 자연스럽게 녹여라. 예를 들어 \"9일 국토교통부는~\"처럼 날짜로 시작하지 말고, \"국토교통부는 9일 ~을 발표했다\", \"~라는 사실이 9일 확인됐다\"처럼 주어나 서술부 사이에 배치하라. 날짜 위치는 기사마다 다양하게 하되 리드(첫 두 문장) 안에는 반드시 포함하라. 표기는 한국 신문 관행대로 'O일'로만 쓴다('7월 9일'이 아니라 '9일'). 'O월 O일' 표기는 이번 달이 아닌 과거·미래 시점을 언급하는 등 월을 밝히지 않으면 혼동되는 경우에만 예외적으로 쓴다.\n" +
     (usePress
-      ? "소스: 아래 보도자료를 바탕으로 작성하라. 보도자료 특유의 일방적 홍보 표현, 과장된 수식어, 자화자찬은 걷어내고 언론의 시각에서 사실 중심으로 재구성하라. 핵심 팩트(수치·일시·기관명·발언)는 보도자료에서 가져오되, 필요하면 웹 검색으로 배경과 맥락, 업계 현황을 보강하라. 보도자료에 없는 내용을 지어내지 마라.\n===보도자료 시작===\n" + pressSrc.slice(0, 6000) + "\n===보도자료 끝===\n"
+      ? "소스: 아래 소스 자료(보도자료 또는 타 매체 기사 원문)를 바탕으로 작성하라. 보도자료라면 일방적 홍보 표현과 과장 수식을 걷어내고 언론의 시각에서 재구성하라. 타 매체 기사라면 절대 원문 문장이나 표현을 한 문장도 그대로 또는 비슷하게 쓰지 말고, 팩트(수치·일시·기관명·발언)만 추출해 리드와 구조와 문장을 완전히 새로 써라. 필요하면 웹 검색으로 배경과 맥락을 보강하고, 소스에 없는 내용을 지어내지 마라.\n===소스 자료 시작===\n" + pressSrc.slice(0, 6000) + "\n===소스 자료 끝===\n"
       : "이슈: " + selected.title + "\n" +
         (selected.summary ? "요약: " + selected.summary + "\n" : "") +
         (selected.url ? "참고 URL(팩트 확인용): " + selected.url + "\n" : "")) +
@@ -1800,6 +1853,8 @@ function selectHot(i){
   a.textContent = selected.url||"";
   a.href = selected.url||"#";
   document.getElementById('pressText').value = "";  // 기사 선택 시 보도자료 모드 해제
+  document.getElementById('urlInput').value = "";
+  document.getElementById('urlStatus').style.display = 'none';
   document.getElementById('btnWrite').disabled = false;
   document.getElementById('btnBroadcast').disabled = false;
   document.getElementById('btnBlog').disabled = false;
