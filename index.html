@@ -281,7 +281,8 @@
     <div class="panel-head"><h2>기사 재구성 데스크</h2></div>
     <div class="desk-body">
       <div id="selArea">
-        <div class="empty" id="noSel">왼쪽 리스트에서 기사를 선택하세요.</div>
+        <div class="empty" id="noSel" style="padding:20px">왼쪽 리스트에서 기사를 선택하거나,<br>아래에 <b>보도자료</b>를 붙여넣으세요.</div>
+        <div id="pressMode" style="display:none;font-size:12px;font-weight:700;color:var(--hot);margin-bottom:8px">📄 보도자료 기반 작성 모드 — 붙여넣은 보도자료를 소스로 씁니다</div>
         <div id="selbox" class="selbox" style="display:none">
           <div class="lab">SELECTED</div>
           <div class="tt" id="selTitle"></div>
@@ -315,6 +316,7 @@
         </label>
       </div>
 
+      <textarea class="facts" id="pressText" style="min-height:110px" oninput="updateWriteButtons()" placeholder="보도자료 전문을 여기 붙여넣으면 기사를 선택하지 않아도 보도자료를 바탕으로 기사·방송·블로그·SNS 글을 씁니다. 홍보성 표현은 걷어내고 언론 시각으로 재구성합니다."></textarea>
       <textarea class="facts" id="extraFacts" placeholder="(선택) 추가로 확보한 팩트·취재 내용·코멘트를 여기 붙여넣으면 기사에 반영합니다."></textarea>
 
       <button class="btn hot" id="btnWrite" onclick="writeArticle()" disabled>새 기사 작성</button>
@@ -977,10 +979,26 @@ const PRESS_STYLES = {
   "뉴욕타임즈": "뉴욕타임스식 내러티브 저널리즘을 한국어로 구현한 문체. 리드는 육하원칙 요약 대신 구체적 장면·인물·일화로 시작해 독자를 끌어들이고, 3~4문단째에 사안의 핵심과 의미를 정리하는 문단(넛 그래프)을 배치한다. 인용은 발언자의 상황과 맥락 묘사와 함께 쓴다. 문장 호흡이 길고 서사적이며 사안을 더 큰 흐름 속에서 조망한다."
 };
 
+// 기사 선택 또는 보도자료 입력 여부에 따라 작성 버튼 활성화
+function updateWriteButtons(){
+  const press = (document.getElementById('pressText').value||"").trim();
+  const pressOn = press.length >= 50;
+  const on = !!selected || pressOn;
+  ['btnWrite','btnBroadcast','btnBlog','btnSns'].forEach(id=>{
+    document.getElementById(id).disabled = !on;
+  });
+  const pm = document.getElementById('pressMode');
+  pm.style.display = pressOn ? 'block' : 'none';
+  if(pressOn) document.getElementById('noSel').style.display = 'none';
+  else if(!selected) document.getElementById('noSel').style.display = 'block';
+}
+
 /* ---------- 기사 재구성 ---------- */
 async function writeArticle(mode){
   mode = (mode === 'broadcast' || mode === 'blog' || mode === 'sns') ? mode : 'article';
-  if(!selected) return;
+  const pressSrc = (document.getElementById('pressText').value||"").trim();
+  const usePress = pressSrc.length >= 50;
+  if(!selected && !usePress) return;
   const btn = document.getElementById('btnWrite');
   const btnB = document.getElementById('btnBroadcast');
   const btnBl = document.getElementById('btnBlog');
@@ -1093,9 +1111,11 @@ async function writeArticle(mode){
     "오늘은 " + todayStr + "이다. " +
     ({article:"다음 이슈에 대한 새 기사를 작성하라.\n", blog:"다음 이슈에 대한 네이버 블로그 글을 작성하라.\n", sns:"다음 이슈에 대한 Threads·페이스북 겸용 SNS 글을 작성하라.\n", broadcast:"다음 이슈에 대한 방송 뉴스 원고(앵커 멘트 + 기자 리포트)를 작성하라.\n"})[mode] +
     "필수: 본문에는 반드시 날짜가 들어가야 하지만, 절대 문장 맨 앞에 기계적으로 붙이지 마라. 노련한 기자처럼 리드 문장의 흐름 속에 자연스럽게 녹여라. 예를 들어 \"9일 국토교통부는~\"처럼 날짜로 시작하지 말고, \"국토교통부는 9일 ~을 발표했다\", \"~라는 사실이 9일 확인됐다\"처럼 주어나 서술부 사이에 배치하라. 날짜 위치는 기사마다 다양하게 하되 리드(첫 두 문장) 안에는 반드시 포함하라. 표기는 한국 신문 관행대로 'O일'로만 쓴다('7월 9일'이 아니라 '9일'). 'O월 O일' 표기는 이번 달이 아닌 과거·미래 시점을 언급하는 등 월을 밝히지 않으면 혼동되는 경우에만 예외적으로 쓴다.\n" +
-    "이슈: " + selected.title + "\n" +
-    (selected.summary ? "요약: " + selected.summary + "\n" : "") +
-    (selected.url ? "참고 URL(팩트 확인용): " + selected.url + "\n" : "") +
+    (usePress
+      ? "소스: 아래 보도자료를 바탕으로 작성하라. 보도자료 특유의 일방적 홍보 표현, 과장된 수식어, 자화자찬은 걷어내고 언론의 시각에서 사실 중심으로 재구성하라. 핵심 팩트(수치·일시·기관명·발언)는 보도자료에서 가져오되, 필요하면 웹 검색으로 배경과 맥락, 업계 현황을 보강하라. 보도자료에 없는 내용을 지어내지 마라.\n===보도자료 시작===\n" + pressSrc.slice(0, 6000) + "\n===보도자료 끝===\n"
+      : "이슈: " + selected.title + "\n" +
+        (selected.summary ? "요약: " + selected.summary + "\n" : "") +
+        (selected.url ? "참고 URL(팩트 확인용): " + selected.url + "\n" : "")) +
     (extra ? "추가 확보 팩트(우선 반영):\n" + extra + "\n" : "");
 
   if(mode === 'article'){
@@ -1110,7 +1130,9 @@ async function writeArticle(mode){
   }else{
     user += "리포트 분량: " + spec.broadcast + "\n";
   }
-  user += "웹 검색으로 이 이슈의 최신 팩트를 확인한 뒤 작성하라.";
+  user += usePress
+    ? "웹 검색은 배경·맥락 보강에만 사용하고, 사실관계의 중심은 보도자료로 삼아라."
+    : "웹 검색으로 이 이슈의 최신 팩트를 확인한 뒤 작성하라.";
 
   const timer = setTimeout(()=>{ step.textContent = ({article:"리드와 구조를 새로 짜는 중…", blog:"블로그 글을 구성하는 중…", sns:"SNS 글을 구성하는 중…", broadcast:"앵커 멘트와 리포트를 구성하는 중…"})[mode]; }, 12000);
 
