@@ -963,6 +963,7 @@ function selectArticle(i){
   const a = document.getElementById('selUrl');
   a.textContent = selected.url||"";
   a.href = selected.url||"#";
+  document.getElementById('pressText').value = "";  // 기사 선택 시 보도자료 모드 해제
   document.getElementById('btnWrite').disabled = false;
   document.getElementById('btnBroadcast').disabled = false;
   document.getElementById('btnBlog').disabled = false;
@@ -1750,6 +1751,7 @@ function selectHot(i){
   const a = document.getElementById('selUrl');
   a.textContent = selected.url||"";
   a.href = selected.url||"#";
+  document.getElementById('pressText').value = "";  // 기사 선택 시 보도자료 모드 해제
   document.getElementById('btnWrite').disabled = false;
   document.getElementById('btnBroadcast').disabled = false;
   document.getElementById('btnBlog').disabled = false;
