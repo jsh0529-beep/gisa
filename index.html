@@ -70,6 +70,7 @@
   }
   .keybar button:hover{background:#4A5F72}
   .keybar .hint{font-size:11px;color:#7A8C9B;width:100%}
+  #costMeter{font-family:var(--mono);font-size:12px;font-weight:600;color:#3DDC84;margin-left:auto;white-space:nowrap}
 
   .wrap{max-width:1180px;margin:0 auto;padding:20px 16px;display:grid;grid-template-columns:420px 1fr;gap:18px}
   @media(max-width:900px){.wrap{grid-template-columns:1fr}}
@@ -234,6 +235,7 @@
   <input type="password" id="apiKey" placeholder="sk-ant-api03-..." autocomplete="off">
   <button onclick="saveKey()">저장</button>
   <button onclick="clearKey()">삭제</button>
+  <span id="costMeter" title="이 브라우저에서 오늘 발생한 API 비용 추정치 (토큰 사용량 기준)">오늘 ≈ $0.00</span>
   <span class="hint">사용할 AI를 고르고 그 AI의 키를 저장하세요 (AI별로 따로 저장됩니다). 키는 이 브라우저에만 저장되며 서버로 전송되지 않습니다. 발급 방법은 페이지 하단 안내 참고. 절대 GitHub 코드에 키를 직접 넣지 마세요.</span>
 </div>
 
@@ -432,6 +434,32 @@ window.addEventListener('DOMContentLoaded', ()=>{
   refreshKeyDot();
 });
 
+/* ---------- 오늘 사용액 추적 (API 응답의 토큰 사용량 기반 추정치) ---------- */
+const PRICE_PER_M = {  // [입력, 출력] 100만 토큰당 달러 (추정 단가)
+  "claude-sonnet-4-6":[3,15], "claude-haiku-4-5-20251001":[1,5],
+  "gpt-4.1":[2,8], "gpt-4.1-mini":[0.4,1.6],
+  "gemini-3.1-pro-preview":[2,12], "gemini-3.5-flash":[0.5,3], "gemini-flash-latest":[0.5,3]
+};
+function todayKey(){ const d=new Date(); return d.getFullYear()+"-"+(d.getMonth()+1)+"-"+d.getDate(); }
+function addCost(usd){
+  if(!usd || usd<=0) return;
+  let c = {d:todayKey(), usd:0, n:0};
+  try{ const s=JSON.parse(localStorage.getItem('md_cost')||"null"); if(s && s.d===todayKey()) c=s; }catch(e){}
+  c.usd += usd; c.n += 1;
+  try{ localStorage.setItem('md_cost', JSON.stringify(c)); }catch(e){}
+  renderCost();
+}
+function renderCost(){
+  let c = null;
+  try{ const s=JSON.parse(localStorage.getItem('md_cost')||"null"); if(s && s.d===todayKey()) c=s; }catch(e){}
+  const el = document.getElementById('costMeter');
+  if(el) el.textContent = "오늘 ≈ $" + (c ? c.usd.toFixed(2) : "0.00") + (c && c.n ? " ("+c.n+"회)" : "");
+}
+function tokenCost(model, inTok, outTok){
+  const p = PRICE_PER_M[model] || [2,8];
+  return ((inTok||0)*p[0] + (outTok||0)*p[1]) / 1000000;
+}
+
 /* ---------- AI 호출 어댑터 (Claude / ChatGPT / Gemini 공용) ----------
    callAI({system, user, maxTokens, searchUses, tier}) → 텍스트 반환
    tier: 'small'(리스트 폴백, 저가 모델) | 'large'(기사 작성) */
@@ -474,6 +502,10 @@ async function callClaudeAI(opts, key){
       });
       if(!res.ok) throw await apiError(res, "Claude");
       const data = await res.json();
+      if(data.usage){
+        const searches = (data.usage.server_tool_use && data.usage.server_tool_use.web_search_requests) || 0;
+        addCost(tokenCost(m, data.usage.input_tokens, data.usage.output_tokens) + searches*0.01);
+      }
       // 웹 검색 시 텍스트가 인용 단위 블록으로 쪼개져 오므로 줄바꿈 없이 이어붙임
       const text = (data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("").trim();
       if(!text) throw new Error("Claude 응답이 비어 있습니다.");
@@ -505,6 +537,7 @@ async function callOpenAI(opts, key){
     if(/web_search|tool/i.test(e.message)){ data = await call("web_search_preview"); }
     else throw e;
   }
+  if(data.usage) addCost(tokenCost(model, data.usage.input_tokens, data.usage.output_tokens) + 0.02);
   let text = "";
   (data.output||[]).forEach(item=>{
     if(item.type==="message" && Array.isArray(item.content)){
@@ -537,6 +570,7 @@ async function callGemini(opts, key){
       });
       if(!res.ok) throw await apiError(res, "Gemini");
       const data = await res.json();
+      if(data.usageMetadata) addCost(tokenCost(m, data.usageMetadata.promptTokenCount, (data.usageMetadata.candidatesTokenCount||0)+(data.usageMetadata.thoughtsTokenCount||0)));
       const parts = (((data.candidates||[])[0]||{}).content||{}).parts || [];
       const text = parts.map(p=>p.text||"").join("").trim();
       if(!text) throw new Error("Gemini 응답이 비어 있습니다.");
@@ -1454,6 +1488,7 @@ async function generateArticleImage(){
       }
       lastImgB64 = imgPart.inlineData.data;
       lastImgMime = imgPart.inlineData.mimeType || "image/png";
+      addCost(0.10); // Gemini 이미지 1장 추정
     }else{
       const key = getKeyFor('openai');
       let data = null;
@@ -1475,6 +1510,7 @@ async function generateArticleImage(){
       if(!b64) throw new Error("이미지 데이터를 받지 못했습니다.");
       lastImgB64 = b64;
       lastImgMime = "image/png";
+      addCost(0.17); // ChatGPT 이미지 1장 추정
     }
     const img = document.getElementById('genImg');
     img.src = "data:"+lastImgMime+";base64,"+lastImgB64;
@@ -1921,6 +1957,7 @@ async function preloadAll(){
 window.addEventListener('DOMContentLoaded', ()=>{
   try{ history = JSON.parse(sessionStorage.getItem('md_history')||"[]"); }catch(e){ history = []; }
   renderHistory();
+  renderCost();
   preloadAll();
 });
 </script>
