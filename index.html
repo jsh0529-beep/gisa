@@ -196,6 +196,10 @@
   .citelinks a{font-size:11px;color:#1D6FE0;text-decoration:none;border:1px solid var(--line);border-radius:12px;padding:3px 10px;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .citelinks a:hover{border-color:#1D6FE0}
   .qc a.factsrc{color:#1D6FE0;text-decoration:underline;margin-left:4px;font-weight:700}
+  .fixbtn{margin-left:8px;padding:3px 10px;border:none;border-radius:10px;background:#8E1B15;color:#fff;
+    font-size:11px;font-weight:700;cursor:pointer;font-family:var(--sans)}
+  .fixbtn:hover{background:#6E1510}
+  .fixbtn.all{background:var(--ink);padding:5px 14px;border-radius:12px}
   .qc{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
   .qc span{font-size:11px;font-weight:600;padding:4px 10px;border-radius:12px}
   .qc .ok{background:#E4F3EB;color:var(--ok)}
@@ -1561,7 +1565,8 @@ async function verifyFacts(mode){
       user:
         "아래 기사에서 검증 가능한 핵심 팩트(수치, 일시, 인명, 직함, 기관명, 발언 내용)를 뽑아 정확한지 검증하라. " + srcDesc + citeList + "\n" +
         "검증 기준: 숫자와 단위(억/조, %/%p), 날짜, 인물의 직함과 소속, 발언의 취지가 원출처와 일치하는가. " +
-        "출력: 문제가 있는 항목만 JSON 배열로. [{\"item\":\"문제 항목 20자 이내\",\"why\":\"불일치 내용 25자 이내 (예: 원문 10m vs 기사 15m)\",\"cause\":\"기사가 왜 다르게 썼는지 원인 진단 25자 이내\",\"fix\":\"권장 조치 15자 이내\",\"src\":\"그 팩트의 근거가 된 자료 URL (참고 자료 목록에서 고르거나 검색으로 확인, 못 찾으면 빈 문자열)\"}] 문제가 하나도 없으면 빈 배열 []만 출력. 코드블록·설명 금지.\n" +
+        "출력: 문제가 있는 항목만 JSON 배열로. [{\"item\":\"문제 항목 20자 이내\",\"why\":\"불일치 내용 25자 이내 (예: 원문 10m vs 기사 15m)\",\"cause\":\"기사가 왜 다르게 썼는지 원인 진단 25자 이내\",\"fix\":\"권장 조치 15자 이내\",\"find\":\"수정 대상 문구 — 기사 본문에 적힌 그대로 정확히 복사한 연속 문자열 (본문에 딱 한 번만 등장하도록 앞뒤 단어를 포함해 충분히 길게)\",\"replace\":\"교체 후 문구 (find 자리에 그대로 들어갈 완성된 문장 조각)\",\"src\":\"그 팩트의 근거가 된 자료 URL (못 찾으면 빈 문자열)\"}] 문제가 하나도 없으면 빈 배열 []만 출력. 코드블록·설명 금지.\n" +
+        "find는 반드시 기사 본문에서 한 글자도 바꾸지 말고 그대로 복사하라. 자동 수정이 부적절한 항목(문장 삭제가 필요한 경우 등)은 find와 replace를 빈 문자열로 두라.\n" +
         "cause 진단 기준: 참고 자료들을 확인해 다음 중 판단하라 — (1)다른 출처가 그 수치를 보도함(어느 매체인지 명시하고 src에 URL) (2)반올림·어림 표현 (3)단위 혼동(억/조, %/%p, m/km 등) (4)원문 안의 다른 수치와 혼동 (5)어디에도 근거 없음(생성 오류 추정). " +
         "fix 예시: '원문 수치로 교체', '출처 병기 권장', '해당 문장 삭제'. " +
         "원문에 없지만 외부 자료에서 온 정보를 지적할 때는 반드시 어느 자료에서 온 것인지 src에 URL을 넣어라. " +
@@ -1572,6 +1577,7 @@ async function verifyFacts(mode){
     let issues = [];
     try{ issues = parseJsonArray(text); }catch(e){ issues = []; }
     if(Array.isArray(issues) && issues.length){
+      const fixables = [];
       issues.slice(0,5).forEach(it=>{
         const s = document.createElement('span');
         s.className = 'fact-warn';
@@ -1588,8 +1594,23 @@ async function verifyFacts(mode){
           a.textContent = "출처 보기";
           s.appendChild(a);
         }
+        if(it.find && it.replace){
+          const b = document.createElement('button');
+          b.className = 'fixbtn';
+          b.textContent = "수정 적용";
+          b.onclick = ()=>{ applyFactFix(it, s); };
+          s.appendChild(b);
+          fixables.push({it, s});
+        }
         box.appendChild(s);
       });
+      if(fixables.length >= 2){
+        const all = document.createElement('button');
+        all.className = 'fixbtn all';
+        all.textContent = "권장 수정 모두 적용 ("+fixables.length+"건)";
+        all.onclick = ()=>{ fixables.forEach(f=>applyFactFix(f.it, f.s)); all.remove(); };
+        box.appendChild(all);
+      }
     }else{
       const s = document.createElement('span');
       s.className = 'fact-ok';
@@ -1805,6 +1826,47 @@ function copyForCms(){
     c.textContent = "CMS용 복사됨 — CMS 기사 작성 화면에서 북마클릿 실행";
     setTimeout(()=>{ c.textContent=""; }, 3500);
   });
+}
+
+/* ---------- 팩트 권장 수정 원클릭 적용 ---------- */
+function renderBodyOnly(){
+  const box = document.getElementById('articleBody');
+  box.innerHTML = "";
+  articleRaw.split(/\n+/).forEach(line=>{
+    const t = line.trim();
+    if(!t) return;
+    const p = document.createElement('p');
+    p.textContent = t;
+    box.appendChild(p);
+  });
+}
+
+function applyFactFix(it, badgeEl){
+  if(!it.find || !it.replace) return false;
+  let done = false;
+  if(articleRaw.includes(it.find)){
+    articleRaw = articleRaw.replace(it.find, it.replace);
+    done = true;
+  }else{
+    // 공백 차이만 다른 경우 유연 매칭
+    try{
+      const rx = new RegExp(it.find.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s*"));
+      if(rx.test(articleRaw)){ articleRaw = articleRaw.replace(rx, it.replace); done = true; }
+    }catch(e){}
+  }
+  if(done){
+    renderBodyOnly();
+    // 이력의 최신 항목에도 반영
+    if(history[0] && history[0].raw && history[0].raw.includes(it.find)){
+      history[0].raw = history[0].raw.replace(it.find, it.replace);
+      try{ sessionStorage.setItem('md_history', JSON.stringify(history)); }catch(e){}
+    }
+    badgeEl.className = 'fact-ok';
+    badgeEl.textContent = "✓ 수정 적용됨: " + (it.replace.length > 34 ? it.replace.slice(0,34)+"…" : it.replace);
+  }else{
+    alert("자동 수정 실패 — 본문에서 해당 문구를 찾지 못했습니다. 직접 수정해 주세요.");
+  }
+  return done;
 }
 
 function copyArticle(){
