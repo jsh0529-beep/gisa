@@ -527,6 +527,7 @@ async function callClaudeAI(opts, key){
         const searches = (data.usage.server_tool_use && data.usage.server_tool_use.web_search_requests) || 0;
         addCost(tokenCost(m, data.usage.input_tokens, data.usage.output_tokens) + searches*0.01);
       }
+      lastTruncated = (data.stop_reason === "max_tokens");
       lastCites = [];
       (data.content||[]).forEach(b=>{
         if(b.type==="text" && Array.isArray(b.citations)){
@@ -565,6 +566,7 @@ async function callOpenAI(opts, key){
     else throw e;
   }
   if(data.usage) addCost(tokenCost(model, data.usage.input_tokens, data.usage.output_tokens) + 0.02);
+  lastTruncated = (data.status === "incomplete" && data.incomplete_details && data.incomplete_details.reason === "max_output_tokens");
   let text = "";
   lastCites = [];
   (data.output||[]).forEach(item=>{
@@ -604,6 +606,7 @@ async function callGemini(opts, key){
       if(!res.ok) throw await apiError(res, "Gemini");
       const data = await res.json();
       if(data.usageMetadata) addCost(tokenCost(m, data.usageMetadata.promptTokenCount, (data.usageMetadata.candidatesTokenCount||0)+(data.usageMetadata.thoughtsTokenCount||0)));
+      lastTruncated = ((((data.candidates||[])[0]||{}).finishReason)||"") === "MAX_TOKENS";
       lastCites = [];
       const gm = ((data.candidates||[])[0]||{}).groundingMetadata;
       if(gm && Array.isArray(gm.groundingChunks)){
@@ -1298,11 +1301,26 @@ async function writeArticle(mode){
   const timer = setTimeout(()=>{ step.textContent = ({article:"리드와 구조를 새로 짜는 중…", blog:"블로그 글을 구성하는 중…", sns:"SNS 글을 구성하는 중…", broadcast:"앵커 멘트와 리포트를 구성하는 중…"})[mode]; }, 12000);
 
   try{
-    const text = await callAI({
-      tier:'large', maxTokens: mode==='sns' ? 2000 : 6000, searchUses: mode==='sns' ? 2 : 3,
+    // Gemini 3 등은 내부 '생각' 토큰이 출력 한도에 포함되므로 한도를 넉넉히 잡는다 (실사용 토큰만 과금)
+    let text = await callAI({
+      tier:'large', maxTokens: mode==='sns' ? 4000 : 12000, searchUses: mode==='sns' ? 2 : 3,
       system: system, user: user
     });
+    if(lastTruncated){
+      // 길이 제한으로 잘렸으면 한도를 두 배로 올려 한 번 자동 재시도
+      step.textContent = "글이 잘려서 더 큰 한도로 다시 생성 중…";
+      try{
+        const retry = await callAI({
+          tier:'large', maxTokens: mode==='sns' ? 8000 : 24000, searchUses: mode==='sns' ? 2 : 3,
+          system: system, user: user
+        });
+        if(retry) text = retry;
+      }catch(e){ console.warn("재시도 실패, 1차 결과 사용:", e.message); }
+    }
     if(!text) throw new Error("생성 결과가 비어 있습니다.");
+    if(lastTruncated){
+      errBox.innerHTML = '<div class="err">응답이 길이 제한으로 잘렸을 수 있습니다. 분량이 짧아 보이면 다시 생성해 주세요.</div>';
+    }
     articleRaw = text;
     renderArticle(text, mode);
     // 작성에 사용된 참고 자료 스냅샷 (URL 중복 제거, 최대 8건)
@@ -1348,6 +1366,7 @@ async function writeArticle(mode){
 let articleRaw = "";
 let lastSourceText = "";  // 작성에 사용된 원문/보도자료 (팩트 재검증 대조용)
 let lastCites = [];       // 직전 AI 호출이 인용한 웹 자료 (어댑터가 채움)
+let lastTruncated = false; // 직전 응답이 길이 제한으로 잘렸는지
 let articleCites = [];    // 기사 작성에 실제 사용된 참고 자료 (스냅샷)
 
 function parseSections(text){
