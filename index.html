@@ -291,6 +291,7 @@
         <button class="chip" data-cat="연예" onclick="switchHotCat('연예')">연예</button>
         <button class="chip" data-cat="스포츠" onclick="switchHotCat('스포츠')">스포츠</button>
         <button class="chip" data-cat="부동산" onclick="switchHotCat('부동산')">부동산</button>
+        <button class="chip" data-cat="외신" onclick="switchHotCat('외신')">외신</button>
         <button class="chip" data-cat="커뮤니티" onclick="switchHotCat('커뮤니티')">커뮤</button>
         <button class="chip" data-cat="유튜브" onclick="switchHotCat('유튜브')">유튜브 소재</button>
       </div>
@@ -1846,6 +1847,41 @@ async function scrapeTodayhumor(){
   return out;
 }
 
+// 범용 RSS 피드 수집 (최근 24시간, 최신순)
+async function fetchRssFeed(url, catLabel){
+  const text = decodeKR(await fetchRaw(url));
+  const items = parseRssItems(text);
+  const all = [], seen = new Set();
+  for(const it of items){
+    const title = cleanTitle(it.title);
+    if(title.length < 8 || seen.has(title)) continue;
+    seen.add(title);
+    let ageH = 999;
+    const d = new Date(it.pubDate);
+    if(!isNaN(d)) ageH = (Date.now()-d.getTime())/3600000;
+    all.push({title, outlet:cleanTitle(it.source), url:it.link, time:relTime(it.pubDate), ageH,
+      category:catLabel, summary:"", potential:"중간"});
+  }
+  let fresh = all.filter(a=>a.ageH <= 24).sort((a,b)=>a.ageH-b.ageH);
+  if(fresh.length < 3) fresh = all;
+  const out = fresh.slice(0,10);
+  out.forEach((a,i)=>{ a.potential = i<3 ? "높음" : "중간"; });
+  if(out.length < 3) throw new Error("RSS 파싱 실패 ("+out.length+"건)");
+  return out;
+}
+
+// 야후 외신: 메인 헤드라인 + 월드 섹션 (공식 RSS)
+async function yahooSrcs(){
+  const r = await Promise.allSettled([
+    fetchRssFeed("https://news.yahoo.com/rss/", "외신"),
+    fetchRssFeed("https://news.yahoo.com/rss/world", "외신")
+  ]);
+  return [
+    {key:"g", label:"Yahoo 메인", items: r[0].status==="fulfilled" ? r[0].value : []},
+    {key:"e", label:"Yahoo 월드", items: r[1].status==="fulfilled" ? r[1].value : []}
+  ];
+}
+
 // 구글 뉴스 검색 RSS 주소 (최신순)
 function gnSearchUrl(q){
   return "https://news.google.com/rss/search?q="+encodeURIComponent(q)+"&hl=ko&gl=KR&ceid=KR:ko";
@@ -1962,7 +1998,7 @@ function isSameTopic(a, b){
 async function youtubePicks(){
   // 이미 수집된 전 카테고리 기사를 후보 풀로 구성
   let pool = [];
-  ["종합","정치","경제","사회","연예","스포츠","부동산","커뮤니티"].forEach(c=>{
+  ["종합","정치","경제","사회","연예","스포츠","부동산","외신","커뮤니티"].forEach(c=>{
     const h = hotCache[c];
     if(h && h.articles) pool = pool.concat(h.articles);
   });
@@ -2072,6 +2108,8 @@ async function loadHot(force){
     srcs = await communitySrcs();
   }else if(cat === "부동산"){
     srcs = await realEstateSrcs();
+  }else if(cat === "외신"){
+    srcs = await yahooSrcs();
   }else{
     const conf = HOT_CATS[cat];
     const r = await Promise.allSettled([ scrapeNateRanking(conf.nate), fetchGoogleTopic(conf.topic, cat) ]);
@@ -2254,6 +2292,24 @@ async function preloadAll(){
     }catch(e){ console.warn("부동산 백그라운드 수집 실패:", e.message); }
   })();
   catTasks.push(reTask);
+
+  // 외신(야후)도 백그라운드 수집
+  const yhTask = (async ()=>{
+    await new Promise(res=>setTimeout(res, 1500));
+    try{
+      const srcs = await yahooSrcs();
+      const arts = mergeSources(srcs, "외신");
+      if(!arts.length) return;
+      const failed = srcs.filter(s=>!s.items.length).map(s=>s.label);
+      hotCache["외신"] = {articles:arts, stamp:stampNow(), statusText: failed.length ? (failed.join("·")+" 제외") : ""};
+      if(hotCat === "외신"){
+        hotArticles = arts; renderHot();
+        document.getElementById('hotStamp').textContent = hotCache["외신"].stamp;
+        hotStatus.textContent = hotCache["외신"].statusText;
+      }
+    }catch(e){ console.warn("외신 백그라운드 수집 실패:", e.message); }
+  })();
+  catTasks.push(yhTask);
 
   // 커뮤니티 베스트도 백그라운드 수집
   const commTask = (async ()=>{
