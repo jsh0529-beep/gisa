@@ -186,7 +186,8 @@
   .article p:last-child{margin-bottom:0}
   .cands{border:1px dashed var(--line);border-radius:8px;padding:10px 14px;margin-bottom:10px;background:#F7F9FA}
   .cands::before{content:attr(data-label);display:block;font-family:var(--mono);font-size:10px;color:var(--ink-soft);margin-bottom:6px}
-  .cand{font-size:14px;font-weight:700;padding:5px 8px;border-radius:5px;cursor:pointer;line-height:1.4}
+  .cand{font-size:14px;font-weight:700;padding:5px 8px;border-radius:5px;cursor:pointer;line-height:1.4;display:flex;align-items:flex-start;gap:8px}
+  .candck{margin-top:3px;accent-color:var(--hot);cursor:pointer;flex-shrink:0}
   #subCands .cand{font-weight:500;font-size:13px}
   .cand:hover{background:var(--hot-bg)}
   .cand.done{background:#E4F3EB;color:var(--ok)}
@@ -377,8 +378,8 @@
         </div>
         <div class="qc" id="qcBox" style="display:none"></div>
         <div class="cands" id="anchorBox" data-label="아나운서 앵커 멘트 — 클릭하면 복사" style="display:none"></div>
-        <div class="cands" id="titleCands" data-label="제목 후보 — 클릭하면 복사" style="display:none"></div>
-        <div class="cands" id="subCands" data-label="부제 후보 — 클릭하면 복사" style="display:none"></div>
+        <div class="cands" id="titleCands" data-label="제목 후보 — 체크: CMS 입력용 선택 · 글자 클릭: 복사" style="display:none"></div>
+        <div class="cands" id="subCands" data-label="부제 후보 — 체크: CMS 입력용 선택 · 글자 클릭: 복사" style="display:none"></div>
         <div class="article" id="articleBody"></div>
         <div class="srcline" id="srcLine" style="display:none"></div>
         <div class="citelinks" id="citeLinks" style="display:none"></div>
@@ -1186,7 +1187,11 @@ async function writeArticle(mode){
       "너는 한국 언론사의 베테랑 데스크를 보조하는 기사 작성 어시스턴트다. 네이버 뉴스·네이버 픽에서 높은 조회수를 내는 기사 작법에 정통하다. " +
       commonHead +
       "[네이버 픽 최적화 규칙 — 반드시 적용]\n" +
-      "제목: 25~35자. 핵심 검색 키워드(인물명·사안명)를 제목 앞쪽에 배치. 가장 강한 팩트나 발언을 따옴표 인용형(\"…\")으로 활용. 구체적 숫자가 있으면 제목에 넣기. 궁금증을 남기되 본문이 답을 주는 제목만 허용. 본문과 무관한 낚시성 제목은 저품질 판정 위험이 있으므로 금지.\n" +
+      "제목: 네이버에서 클릭이 터지는 제목의 공통점은 '구체성 + 궁금증'이다. 제목 후보 3안은 서로 다른 공식으로 쓴다.\n" +
+      "  1안 발언 인용형: 가장 강렬한 발언이나 핵심 구절을 따옴표(\"…\")로 앞세운다. 예: \"승진 대신 계산대\"…코스트코 40년 직원의 14억 연금\n" +
+      "  2안 숫자 강조형: 가장 놀라운 구체적 숫자를 제목의 축으로 삼는다. 두루뭉술한 표현 대신 정확한 수치.\n" +
+      "  3안 반전·대비형: 'A 대신 B', '~인 줄 알았는데', '~했더니' 같은 예상을 깨는 구조나, 결말을 살짝 감춰 클릭하게 만드는 구조.\n" +
+      "  공통 규칙: 25~35자. 핵심 검색 키워드(인물명·사안명)를 제목 앞쪽에 배치. 조사를 생략하고 명사형·말줄임(…)으로 압축해 밀도를 높인다. 궁금증을 남기되 본문이 반드시 답을 주는 제목만 허용. 본문과 무관한 낚시, 과장, 어그로성 왜곡은 저품질 판정 위험이 있으므로 금지.\n" +
       "리드: 첫 문장에 가장 자극적인 팩트를 배치해 3초 안에 계속 읽게 만든다. 첫 두 문장 안에 육하원칙 핵심 완결.\n" +
       "본문: 모바일 가독성 기준. 한 문단은 2~3문장으로 짧게 끊는다. 핵심 검색 키워드를 본문에 자연스럽게 3~5회 반복. 중간에 당사자·전문가 발언 인용으로 리듬을 만든다.\n" +
       "마무리: 기사는 확인된 팩트로 끝낸다. 마지막 문단은 예정된 일정, 확정된 후속 절차, 당사자의 실제 발언 등 구체적 사실로 담백하게 마친다.\n\n" +
@@ -1468,18 +1473,34 @@ function renderArticle(text, mode){
     const box = document.getElementById(boxId);
     box.innerHTML = "";
     if(!raw){ box.style.display = 'none'; return; }
+    const setPick = (v)=>{ if(boxId==='titleCands') lastTitleCand = v; if(boxId==='subCands') lastSubCand = v; };
     raw.split("\n").map(l=>l.trim()).filter(Boolean).forEach((line, idx)=>{
       const clean = line.replace(/^\d+[.)]\s*/,"");
-      if(idx===0){ if(boxId==='titleCands') lastTitleCand = clean; if(boxId==='subCands') lastSubCand = clean; }
+      if(idx===0) setPick(clean); // 기본값: 1번 후보
       const div = document.createElement('div');
       div.className = 'cand';
-      div.textContent = clean;
-      div.title = "클릭하면 복사됩니다";
+      // 체크박스: 체크한 후보가 CMS 입력 복사에 사용됨 (하나만 선택)
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.className = 'candck';
+      cb.checked = (idx===0);
+      cb.title = "체크한 항목이 CMS 입력 복사에 사용됩니다";
+      cb.onclick = (e)=>{
+        e.stopPropagation();
+        box.querySelectorAll('.candck').forEach(o=>{ if(o!==cb) o.checked = false; });
+        cb.checked = true;
+        setPick(clean);
+      };
+      const txt = document.createElement('span');
+      txt.textContent = clean;
+      div.title = "글자를 클릭하면 복사, 체크박스는 CMS 입력용 선택";
       div.onclick = ()=>{
         navigator.clipboard.writeText(clean);
         div.classList.add('done');
         setTimeout(()=>div.classList.remove('done'), 1200);
       };
+      div.appendChild(cb);
+      div.appendChild(txt);
       box.appendChild(div);
     });
     box.style.display = 'block';
