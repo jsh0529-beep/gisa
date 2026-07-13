@@ -198,6 +198,10 @@
   .citelinks::before{content:"참고 자료";font-family:var(--mono);font-size:10px;color:var(--ink-soft);width:100%}
   .citelinks a{font-size:11px;color:#1D6FE0;text-decoration:none;border:1px solid var(--line);border-radius:12px;padding:3px 10px;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .citelinks a:hover{border-color:#1D6FE0}
+  .imgcap{margin-top:8px;padding:10px 12px;background:#F7F9FA;border:1px solid var(--line);border-radius:6px;
+    font-size:13px;line-height:1.6;color:#333;cursor:pointer}
+  .imgcap:hover{background:#EFF3F6}
+  .imgcap.busy{color:var(--ink-soft);cursor:default}
   .qc a.factsrc{color:#1D6FE0;text-decoration:underline;margin-left:4px;font-weight:700}
   .fixbtn{margin-left:8px;padding:3px 10px;border:none;border-radius:10px;background:#8E1B15;color:#fff;
     font-size:11px;font-weight:700;cursor:pointer;font-family:var(--sans)}
@@ -283,21 +287,6 @@
     </ul>
   </section>
 
-  <!-- 조회수 폭발 예측 TOP 20 -->
-  <section class="panel">
-    <div class="panel-head">
-      <h2>💥 조회수 폭발 예측 TOP 20</h2>
-      <span class="stamp" id="predStamp">—</span>
-    </div>
-    <div class="toolbar">
-      <button class="btn hot" id="btnPred" onclick="loadPred()">AI 선별</button>
-      <span class="stamp" id="predStatus">전체 수집 기사에서 중복 제거 후 선별 · 약 1~2센트</span>
-    </div>
-    <ul class="list" id="predList" style="max-height:520px">
-      <li class="empty" style="padding:26px 20px">모든 포털·카테고리에서 수집된 기사를 한데 모아<br>중복을 정리하고, 쓰면 조회수가 터질 기사 20개를<br>AI가 순위·이유와 함께 골라줍니다.</li>
-    </ul>
-  </section>
-
   <!-- 왼쪽 아래: 3개 소스 통합 실시간 인기 TOP 10 -->
   <section class="panel">
     <div class="panel-head">
@@ -324,6 +313,21 @@
       <li class="empty" style="padding:26px 20px">세 소스의 인기 기사를 한 번에 모아 보여줍니다.<br><span style="font-size:11px">전부 직접 수집이라 API 비용이 들지 않습니다.</span></li>
     </ul>
   </section>
+  <!-- 조회수 폭발 예측 TOP 20 -->
+  <section class="panel">
+    <div class="panel-head">
+      <h2>💥 조회수 폭발 예측 TOP 20</h2>
+      <span class="stamp" id="predStamp">—</span>
+    </div>
+    <div class="toolbar">
+      <button class="btn hot" id="btnPred" onclick="loadPred()">AI 선별</button>
+      <span class="stamp" id="predStatus">전체 수집 기사에서 중복 제거 후 선별 · 약 1~2센트</span>
+    </div>
+    <ul class="list" id="predList" style="max-height:520px">
+      <li class="empty" style="padding:26px 20px">모든 포털·카테고리에서 수집된 기사를 한데 모아<br>중복을 정리하고, 쓰면 조회수가 터질 기사 20개를<br>AI가 순위·이유와 함께 골라줍니다.</li>
+    </ul>
+  </section>
+
   </div><!-- /leftcol -->
 
   <!-- 오른쪽: 재구성 데스크 -->
@@ -406,6 +410,7 @@
         <div id="imgErr"></div>
         <div id="imgArea" style="display:none;margin-top:14px">
           <img id="genImg" alt="기사 이미지" style="width:100%;border-radius:8px;border:1px solid var(--line);display:block">
+          <div id="imgCaption" class="imgcap" style="display:none" title="클릭하면 복사됩니다"></div>
           <div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
             <button class="btn ghost" style="padding:6px 12px;font-size:12px" onclick="downloadImage()">4K PNG 다운로드 (3840×2160)</button>
             <button class="btn ghost" style="padding:6px 12px;font-size:12px" onclick="generateArticleImage()">다시 생성</button>
@@ -1805,12 +1810,48 @@ async function generateArticleImage(){
     img.src = "data:"+lastImgMime+";base64,"+lastImgB64;
     document.getElementById('imgInfo').textContent = (prov==='gemini'?"Gemini":"ChatGPT")+" 생성 · 다운로드 시 4K로 변환";
     area.style.display = 'block';
+    genImageCaption(prompt); // 사진 설명 자동 생성 (비동기, 약 0.5센트)
   }catch(err){
     console.error(err);
     errBox.innerHTML = '<div class="err">이미지 생성 실패: '+err.message+'</div>';
   }finally{
     loading.style.display = 'none';
     btn.disabled = false;
+  }
+}
+
+// 신문 사진설명체 캡션 자동 생성
+async function genImageCaption(imgPrompt){
+  const cap = document.getElementById('imgCaption');
+  cap.style.display = 'block';
+  cap.classList.add('busy');
+  cap.textContent = "사진 설명을 작성하는 중…";
+  cap.onclick = null;
+  try{
+    const title = (articleRaw||"").split("\n")[0] || (selected ? selected.title : "");
+    const lead = (articleRaw||"").split("\n").slice(0,3).join(" ").slice(0,300);
+    const text = await callAI({
+      tier:'small', maxTokens:300, searchUses:0,
+      system:"너는 한국 신문 사진부 데스크다. 사진설명(캡션) 한 건만 출력한다. 다른 말은 한 글자도 쓰지 않는다.",
+      user:
+        "아래 기사에 실릴 이미지의 사진설명을 작성하라.\n" +
+        "[기사 핵심]\n" + title + "\n" + lead + "\n" +
+        "[이미지에 담긴 장면]\n" + imgPrompt.slice(0,600) + "\n" +
+        "작성 규칙: 한국 신문 사진설명체 1~2문장, 40~80자. 이미지에 실제로 담긴 장면을 현재형('~하고 있다', '~한 모습')으로 서술하고 기사 맥락을 자연스럽게 연결하라. 이미지에 없는 인물명이나 장소를 단정하지 마라. 과장 금지. 사진설명 문장 외에는 아무것도 출력하지 마라."
+    });
+    const clean = text.replace(/[¶\n]+/g," ").trim();
+    cap.classList.remove('busy');
+    cap.textContent = clean;
+    cap.onclick = ()=>{
+      navigator.clipboard.writeText(clean);
+      const orig = cap.textContent;
+      cap.textContent = "✓ 복사됨";
+      setTimeout(()=>{ cap.textContent = orig; }, 900);
+    };
+  }catch(err){
+    console.warn("캡션 생성 실패:", err.message);
+    cap.classList.remove('busy');
+    cap.textContent = "사진 설명 생성 실패 — 이미지를 다시 생성하면 재시도합니다.";
   }
 }
 
