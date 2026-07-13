@@ -2117,24 +2117,68 @@ async function realEstateSrcs(){
   ];
 }
 
-// 블라인드 토픽 베스트 (실패 시 메인 페이지 폴백)
+// 블라인드 토픽 베스트 — 글(post) 단위로 묶어 제목만 정확히 추출, 조회수는 표시에 활용
 async function scrapeBlindHot(){
   let doc;
   try{ doc = await fetchDoc("https://www.teamblind.com/kr/topics/%ED%86%A0%ED%94%BD-%EB%B2%A0%EC%8A%A4%ED%8A%B8"); }
   catch(e){ doc = await fetchDoc("https://www.teamblind.com/kr/"); }
-  const out = [], seen = new Set();
+
+  // 1) 같은 글을 가리키는 모든 링크를 post ID로 묶고, 텍스트 후보를 수집
+  const posts = {};   // id -> {url, cands:[], views:0, order:n}
+  let order = 0;
   doc.querySelectorAll("a").forEach(a=>{
-    if(out.length>=10) return;
     const href = a.getAttribute("href")||"";
-    if(!/\/kr\/post\//.test(href)) return;
-    const t = cleanTitle(a.textContent);
-    if(t.length < 8 || seen.has(t)) return;
-    if(/^\d+$|좋아요|댓글/.test(t)) return;
-    seen.add(t);
-    let url = href.startsWith("/") ? "https://www.teamblind.com"+href : href;
-    out.push({title:t, outlet:"블라인드", url, time:"핫글",
-      category:"커뮤", summary:"", potential: out.length<3?"높음":"중간"});
+    const m = href.match(/\/kr\/post\/([^\/?#]+)/);
+    if(!m) return;
+    const id = m[1];
+    if(!posts[id]){
+      posts[id] = { url: href.startsWith("/") ? "https://www.teamblind.com"+href : href, cands:[], views:0, order: order++ };
+    }
+    // 앵커 안의 제목스러운 요소 우선 수집
+    a.querySelectorAll("h1,h2,h3,h4,strong,p,span,div").forEach(el=>{
+      const t = (el.textContent||"").trim();
+      if(t) posts[id].cands.push(t);
+    });
+    const own = (a.textContent||"").trim();
+    if(own) posts[id].cands.push(own);
+    // 조회수 추출 (있으면)
+    const vm = own.match(/조회수\s*([\d,]+)/);
+    if(vm) posts[id].views = Math.max(posts[id].views, parseInt(vm[1].replace(/,/g,""))||0);
   });
+
+  // 2) 후보 중 메타데이터를 걸러내고 진짜 제목 선택
+  const isMeta = (s)=>(
+    /조회수|좋아요|댓글|공감|공유|신고|스크랩/.test(s) ||
+    /\*{2,}/.test(s) ||                       // i******* 류 작성자
+    /\s·\s/.test(s) ||                        // 회사명 · 작성자
+    /^\d[\d,.]*$/.test(s) ||                  // 숫자만
+    /^(방금|\d+\s*(분|시간|일)\s*전)$/.test(s)  // 시각만
+  );
+  const pickTitle = (cands)=>{
+    let best = "";
+    for(let c of cands){
+      c = cleanTitle(c).replace(/^\d+\s*[.)]?\s*/, "").replace(/\s+/g," ").trim();
+      c = c.replace(/조회수\s*[\d,]+.*$/, "").replace(/좋아요.*$/, "").trim(); // 꼬리 메타 절단
+      if(c.length < 8 || c.length > 90) continue;
+      if(isMeta(c)) continue;
+      if(c.length > best.length) best = c;
+    }
+    return best;
+  };
+
+  // 3) 페이지 노출 순서대로 상위 10건
+  const ids = Object.keys(posts).sort((a,b)=>posts[a].order - posts[b].order);
+  const out = [], seen = new Set();
+  for(const id of ids){
+    if(out.length >= 10) break;
+    const title = pickTitle(posts[id].cands);
+    if(!title || seen.has(title)) continue;
+    seen.add(title);
+    const v = posts[id].views;
+    out.push({title, outlet:"블라인드", url: posts[id].url,
+      time: v ? "조회 "+v.toLocaleString() : "베스트",
+      category:"커뮤", summary:"", potential: (v>=1000 || out.length<3) ? "높음" : "중간"});
+  }
   if(out.length < 3) throw new Error("블라인드 파싱 실패");
   return out;
 }
