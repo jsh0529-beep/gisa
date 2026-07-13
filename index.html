@@ -139,6 +139,8 @@
   .item .m{font-family:var(--mono);font-size:10px;color:var(--ink-soft);margin-top:5px;display:flex;gap:8px;flex-wrap:wrap}
   .cat{background:var(--ink);color:#fff;padding:1px 6px;border-radius:3px}
   .time.fresh{color:#1D6FE0;font-weight:700}
+  .gradehot{background:var(--hot);color:#fff;padding:1px 7px;border-radius:3px;font-weight:700}
+  .gradehigh{background:#FDEEED;color:var(--hot);padding:1px 7px;border-radius:3px;font-weight:600;border:1px solid #F2C2BF}
   .item .s{font-size:12px;color:var(--ink-soft);margin-top:4px;line-height:1.45}
 
   .empty{padding:44px 20px;text-align:center;color:var(--ink-soft);font-size:13px;line-height:1.7}
@@ -278,6 +280,21 @@
     </div>
     <ul class="list" id="list">
       <li class="empty"><b>이슈 불러오기</b>를 누르면<br>지금 화제가 되는 기사 10건을 수집합니다.<br><span style="font-size:11px">네이버·기타 탭은 포털의 실제 '많이 본 뉴스' 랭킹을<br>직접 가져옵니다 (API 비용 없음).</span></li>
+    </ul>
+  </section>
+
+  <!-- 조회수 폭발 예측 TOP 20 -->
+  <section class="panel">
+    <div class="panel-head">
+      <h2>💥 조회수 폭발 예측 TOP 20</h2>
+      <span class="stamp" id="predStamp">—</span>
+    </div>
+    <div class="toolbar">
+      <button class="btn hot" id="btnPred" onclick="loadPred()">AI 선별</button>
+      <span class="stamp" id="predStatus">전체 수집 기사에서 중복 제거 후 선별 · 약 1~2센트</span>
+    </div>
+    <ul class="list" id="predList" style="max-height:520px">
+      <li class="empty" style="padding:26px 20px">모든 포털·카테고리에서 수집된 기사를 한데 모아<br>중복을 정리하고, 쓰면 조회수가 터질 기사 20개를<br>AI가 순위·이유와 함께 골라줍니다.</li>
     </ul>
   </section>
 
@@ -1055,7 +1072,7 @@ function selectArticle(i){
   selected = tabData[currentTab].articles[i];
   selectedTab = currentTab;
   selectedIndex = i;
-  document.querySelectorAll('#hotList .item').forEach(el=>el.classList.remove('sel'));
+  document.querySelectorAll('#hotList .item, #predList .item').forEach(el=>el.classList.remove('sel'));
   document.querySelectorAll('#list .item').forEach((el,idx)=>el.classList.toggle('sel', idx===i));
   document.getElementById('noSel').style.display = 'none';
   const box = document.getElementById('selbox');
@@ -2065,6 +2082,141 @@ async function etcChainFree(){
   catch(e2){ return await fetchBingNews(); } }
 }
 
+/* ---------- 조회수 폭발 예측 TOP 20 (전체 풀에서 AI 채점) ---------- */
+let predArticles = [];
+
+function buildPool(){
+  let pool = [];
+  // 탭 4개 + 통합 카테고리 캐시 전부
+  ['naver','google','etc','flash'].forEach(k=>{ if(tabData[k] && tabData[k].articles) pool = pool.concat(tabData[k].articles); });
+  ["종합","정치","경제","사회","연예","스포츠","부동산","외신","커뮤니티"].forEach(c=>{
+    const h = hotCache[c];
+    if(h && h.articles) pool = pool.concat(h.articles);
+  });
+  // 포털 간 같은 주제 중복 제거
+  const uniq = [];
+  for(const a of pool){
+    if(uniq.length >= 80) break;
+    if(!a || !a.title) continue;
+    if(uniq.some(u=>isSameTopic(u.title, a.title))) continue;
+    uniq.push(a);
+  }
+  return uniq;
+}
+
+async function loadPred(){
+  const btn = document.getElementById('btnPred');
+  const status = document.getElementById('predStatus');
+  const ul = document.getElementById('predList');
+  btn.disabled = true;
+  status.textContent = "후보 풀 구성 중…";
+  ul.innerHTML = '<li class="empty" style="padding:26px 20px"><div class="loading" style="justify-content:center"><div class="spinner"></div>AI가 조회수 잠재력을 채점 중…</div></li>';
+
+  try{
+    let pool = buildPool();
+    if(pool.length < 20){
+      // 풀이 얕으면 종합 즉석 수집으로 보강
+      const r = await Promise.allSettled([ scrapeNaverRanking(), fetchGoogleNews(), etcChainFree() ]);
+      const srcs = [
+        {key:"n", label:"네이버", items: r[0].status==="fulfilled"?r[0].value:[]},
+        {key:"e", label:"기타", items: r[2].status==="fulfilled"?r[2].value:[]},
+        {key:"g", label:"구글", items: r[1].status==="fulfilled"?r[1].value:[]}
+      ];
+      mergeSources(srcs, "종합").forEach(a=>{
+        if(!pool.some(u=>isSameTopic(u.title, a.title))) pool.push(a);
+      });
+    }
+    if(pool.length < 20) throw new Error("후보 기사가 부족합니다. 리스트가 채워진 뒤 다시 시도하세요.");
+
+    status.textContent = "AI 채점 중… (약 1~2센트)";
+    const listStr = pool.map((a,i)=>(i+1)+". "+a.title).join("\n");
+    const text = await callAI({
+      tier:'small', maxTokens:3000, searchUses:1,
+      system:"너는 포털 뉴스 트래픽을 오래 분석해온 데스크다. 결과는 JSON 배열만 출력한다.",
+      user:
+        "아래 번호가 붙은 기사 목록에서, 지금 기사로 쓰면 네이버·포털에서 조회수가 터질 가능성이 가장 높은 20개를 골라 잠재력 높은 순으로 정렬하라.\n" +
+        "[채점 기준]\n" +
+        "1) 감정 강도: 분노·공감·충격·짠함 등 강한 감정 반응을 부르는가\n" +
+        "2) 논쟁성: 찬반이 갈려 댓글이 붙는 사안인가\n" +
+        "3) 검색 유입: 사람들이 검색할 유명 인물·사건 키워드가 있는가\n" +
+        "4) 생활 직결: 내 돈·부동산·건강·자녀에 바로 영향이 있는가\n" +
+        "5) 신선도: 이미 소비가 끝난 이슈, 며칠 된 이슈는 제외\n" +
+        "6) 클릭 본능: 제목만 봐도 결말이 궁금해지는가\n" +
+        "7) 확산성: 커뮤니티·SNS로 퍼질 화제성이 있는가\n" +
+        "행정 발표, 밋밋한 동정, 단순 시황은 낮게 평가하라. 같은 주제가 여러 번호로 있으면 하나만 뽑아라.\n" +
+        "출력: JSON 배열만, 코드블록·설명 금지. [{\"i\":기사번호,\"grade\":\"터짐|높음\",\"reason\":\"선정 이유 20자 이내\"}] 정확히 20개.\n" +
+        "[기사 목록]\n" + listStr
+    });
+    const picks = parseJsonArray(text);
+    predArticles = picks.map(p=>{
+      const src = pool[(p.i|0)-1];
+      if(!src) return null;
+      return Object.assign({}, src, {grade: p.grade||"높음", reason: p.reason||""});
+    }).filter(Boolean).slice(0,20);
+    if(!predArticles.length) throw new Error("선별 결과 해석 실패 — 다시 시도해 주세요.");
+
+    renderPred();
+    const now = new Date();
+    document.getElementById('predStamp').textContent =
+      now.getHours().toString().padStart(2,'0')+":"+now.getMinutes().toString().padStart(2,'0')+" 기준 · "+pool.length+"건 중 선별";
+    status.textContent = "";
+  }catch(err){
+    console.error(err);
+    ul.innerHTML = '<li class="empty" style="padding:26px 20px">선별에 실패했습니다.<br><span style="font-size:11px">'+err.message+'</span></li>';
+    status.textContent = "";
+  }finally{
+    btn.disabled = false;
+  }
+}
+
+function renderPred(){
+  const ul = document.getElementById('predList');
+  ul.innerHTML = "";
+  predArticles.forEach((a,i)=>{
+    const li = document.createElement('li');
+    li.className = 'item';
+    li.onclick = ()=>selectPred(i);
+    li.innerHTML =
+      '<div class="rank">'+String(i+1).padStart(2,'0')+'</div>'+
+      '<div><div class="t"></div>'+
+      '<div class="m"><span class="grade"></span><span class="outlet"></span><span class="time"></span></div>'+
+      '<div class="s"></div></div>';
+    li.querySelector('.t').textContent = a.title||"";
+    const g = li.querySelector('.grade');
+    if(a.grade === "터짐"){ g.textContent = "🔥 터짐 예상"; g.className = "gradehot"; }
+    else{ g.textContent = "잠재력 높음"; g.className = "gradehigh"; }
+    li.querySelector('.outlet').textContent = a.outlet||"";
+    const tEl = li.querySelector('.time');
+    tEl.textContent = a.time||"";
+    if(/시간 전|분 전|방금/.test(a.time||"")) tEl.classList.add('fresh');
+    li.querySelector('.s').textContent = a.reason||"";
+    ul.appendChild(li);
+  });
+}
+
+function selectPred(i){
+  selected = predArticles[i];
+  selectedTab = null; selectedIndex = -1;
+  document.querySelectorAll('#list .item, #hotList .item').forEach(el=>el.classList.remove('sel'));
+  document.querySelectorAll('#predList .item').forEach((el,idx)=>el.classList.toggle('sel', idx===i));
+  document.getElementById('noSel').style.display = 'none';
+  document.getElementById('selbox').style.display = 'block';
+  document.getElementById('selTitle').textContent = selected.title;
+  const a = document.getElementById('selUrl');
+  a.textContent = selected.url||"";
+  a.href = selected.url||"#";
+  document.getElementById('pressText').value = "";
+  document.getElementById('urlInput').value = "";
+  document.getElementById('urlStatus').style.display = 'none';
+  document.getElementById('btnWrite').disabled = false;
+  document.getElementById('btnBroadcast').disabled = false;
+  document.getElementById('btnBlog').disabled = false;
+  document.getElementById('btnSns').disabled = false;
+  document.getElementById('output').classList.remove('show');
+  document.getElementById('writeErr').innerHTML = "";
+  updateWriteButtons();
+}
+
 /* ---------- 통합 인기 TOP 10 (카테고리별, API 비용 0원) ---------- */
 let hotArticles = [];
 let hotCat = "종합";
@@ -2280,7 +2432,7 @@ function renderHot(){
 function selectHot(i){
   selected = hotArticles[i];
   selectedTab = null; selectedIndex = -1;
-  document.querySelectorAll('#list .item').forEach(el=>el.classList.remove('sel'));
+  document.querySelectorAll('#list .item, #predList .item').forEach(el=>el.classList.remove('sel'));
   document.querySelectorAll('#hotList .item').forEach((el,idx)=>el.classList.toggle('sel', idx===i));
   document.getElementById('noSel').style.display = 'none';
   document.getElementById('selbox').style.display = 'block';
