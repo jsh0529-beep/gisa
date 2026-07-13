@@ -202,6 +202,9 @@
     font-size:13px;line-height:1.6;color:#333;cursor:pointer}
   .imgcap:hover{background:#EFF3F6}
   .imgcap.busy{color:var(--ink-soft);cursor:default}
+  .polishrow{display:flex;gap:6px;margin-top:14px}
+  .polishrow input{flex:1;padding:8px 10px;border:1px solid var(--line);border-radius:6px;font-size:13px;font-family:var(--sans);min-width:0}
+  .newbadge{background:#1D6FE0;color:#fff;font-family:var(--mono);font-size:9px;font-weight:700;padding:1px 6px;border-radius:3px;margin-right:4px}
   .qc a.factsrc{color:#1D6FE0;text-decoration:underline;margin-left:4px;font-weight:700}
   .fixbtn{margin-left:8px;padding:3px 10px;border:none;border-radius:10px;background:#8E1B15;color:#fff;
     font-size:11px;font-weight:700;cursor:pointer;font-family:var(--sans)}
@@ -416,6 +419,10 @@
             <button class="btn ghost" style="padding:6px 12px;font-size:12px" onclick="generateArticleImage()">다시 생성</button>
             <span class="stamp" id="imgInfo"></span>
           </div>
+        </div>
+        <div class="polishrow" id="polishRow">
+          <input type="text" id="polishInput" placeholder="다듬기 지시 — 예: 리드를 더 세게 / 둘째 문단 삭제 / 전체를 20% 짧게" onkeydown="if(event.key==='Enter')polishArticle()">
+          <button class="btn ghost" id="btnPolish" onclick="polishArticle()">다듬기</button>
         </div>
         <p class="note">※ 복사 버튼은 기사 본문만 담습니다(제목·부제 후보, 출처 제외, 빈 줄 없음). 제목·부제 후보는 클릭하면 개별 복사됩니다. 수치·발언·일시는 송고 전 반드시 원출처 대조 확인하세요.</p>
       </div>
@@ -1059,7 +1066,9 @@ function renderList(){
       '<div><div class="t"></div>'+
       '<div class="m"><span class="cat"></span><span class="pot"></span><span class="outlet"></span><span class="time"></span></div>'+
       '<div class="s"></div></div>';
-    li.querySelector('.t').textContent = a.title||"";
+    const tNode = li.querySelector('.t');
+    tNode.textContent = a.title||"";
+    if(a._new){ const nb=document.createElement('span'); nb.className='newbadge'; nb.textContent='NEW'; tNode.prepend(nb); }
     li.querySelector('.cat').textContent = a.category||"뉴스";
     const pot = li.querySelector('.pot');
     if(a.potential==="높음"){ pot.textContent = "⚡ 10만+ 유력"; pot.style.color = "var(--hot)"; pot.style.fontWeight = "600"; }
@@ -1356,6 +1365,7 @@ async function writeArticle(mode){
       errBox.innerHTML = '<div class="err">응답이 길이 제한으로 잘렸을 수 있습니다. 분량이 짧아 보이면 다시 생성해 주세요.</div>';
     }
     articleRaw = text;
+    lastMode = mode; lastLen = len;
     renderArticle(text, mode);
     // 작성에 사용된 참고 자료 스냅샷 (URL 중복 제거, 최대 8건)
     articleCites = [];
@@ -1402,6 +1412,7 @@ let lastSourceText = "";  // 작성에 사용된 원문/보도자료 (팩트 재
 let lastCites = [];       // 직전 AI 호출이 인용한 웹 자료 (어댑터가 채움)
 let lastTruncated = false; // 직전 응답이 길이 제한으로 잘렸는지
 let lastTitleCand = "", lastSubCand = ""; // CMS 입력용 대표 제목·부제 (후보 1번)
+let lastMode = "article", lastLen = "보통"; // 다듬기·검수 재실행용
 let articleCites = [];    // 기사 작성에 실제 사용된 참고 자료 (스냅샷)
 
 function parseSections(text){
@@ -1703,6 +1714,7 @@ function openHistory(i){
   const h = history[i];
   if(!h) return;
   articleRaw = h.raw;
+  lastMode = h.mode; lastLen = h.len || "보통";
   renderArticle(h.raw, h.mode);
   runQC(h.mode, h.len);
   document.getElementById('btnImg').disabled = false;
@@ -1905,6 +1917,43 @@ function copyForCms(){
     c.textContent = "CMS용 복사됨 — CMS 기사 작성 화면에서 북마클릿 실행";
     setTimeout(()=>{ c.textContent=""; }, 3500);
   });
+}
+
+/* ---------- 부분 다듬기 지시 ---------- */
+async function polishArticle(){
+  const input = document.getElementById('polishInput');
+  const btn = document.getElementById('btnPolish');
+  const order = (input.value||"").trim();
+  if(!order){ alert("다듬기 지시를 입력하세요. 예: 리드를 더 세게"); return; }
+  if(!articleRaw){ alert("먼저 기사를 작성하세요."); return; }
+  btn.disabled = true;
+  const origLabel = btn.textContent;
+  btn.textContent = "다듬는 중…";
+  try{
+    const text = await callAI({
+      tier:'large', maxTokens: 12000, searchUses: 0,
+      system:
+        "너는 한국 언론사의 베테랑 데스크다. 기사 본문을 지시에 따라 손보되, 지시와 무관한 부분은 한 글자도 바꾸지 않는다. " +
+        "절대 규칙: 수치·일시·인명·직함·발언 등 팩트를 임의로 바꾸거나 추가하지 마라. 줄바꿈이 필요한 모든 위치에 줄바꿈 문자 대신 기호 ¶ 를 사용하라. " +
+        "수정된 본문 전체만 출력하고, 인사말·설명·구분자 등 다른 것은 한 글자도 출력하지 마라.",
+      user: "[다듬기 지시]\n" + order + "\n\n[현재 기사 본문]\n" + articleRaw.replace(/\n/g, "¶")
+    });
+    let body = preClean(text).trim();
+    if(body.replace(/\s/g,"").length < 50) throw new Error("수정 결과가 비정상적으로 짧습니다.");
+    articleRaw = body;
+    renderBodyOnly();
+    runQC(lastMode, lastLen);
+    input.value = "";
+    const c = document.getElementById('copied');
+    c.textContent = "다듬기 적용됨";
+    setTimeout(()=>{ c.textContent=""; }, 2500);
+  }catch(err){
+    console.error(err);
+    alert("다듬기 실패: " + err.message);
+  }finally{
+    btn.disabled = false;
+    btn.textContent = origLabel;
+  }
 }
 
 /* ---------- 팩트 권장 수정 원클릭 적용 ---------- */
@@ -2424,6 +2473,7 @@ async function loadHot(force){
   const failed = srcs.filter(s=>!s.items.length).map(s=>s.label);
 
   hotArticles = mergeSources(srcs, cat);
+  markSeen(hotArticles);
 
   if(!hotArticles.length){
     ul.innerHTML = '<li class="empty" style="padding:26px 20px">수집에 실패했습니다.<br><span style="font-size:11px">잠시 후 다시 시도해 주세요.</span></li>';
@@ -2435,7 +2485,8 @@ async function loadHot(force){
     const statusText = failed.length ? (failed.join("·")+" 제외") : "";
     document.getElementById('hotStamp').textContent = stamp;
     status.textContent = statusText;
-    hotCache[cat] = {articles: hotArticles, stamp, statusText};
+    markSeen(arts);
+        hotCache[cat] = {articles: hotArticles, stamp, statusText};
   }
   btn.disabled = false;
 }
@@ -2458,7 +2509,9 @@ function renderHot(){
       c2.textContent = a.category;
       c2.className = 'cat';
     }
-    li.querySelector('.t').textContent = a.title||"";
+    const tNode = li.querySelector('.t');
+    tNode.textContent = a.title||"";
+    if(a._new){ const nb=document.createElement('span'); nb.className='newbadge'; nb.textContent='NEW'; tNode.prepend(nb); }
     const sb = li.querySelector('.srcbadge');
     sb.textContent = a.srcLabel;
     sb.classList.add(a.src);
@@ -2527,6 +2580,79 @@ function loadSessionCache(){
   }catch(e){ return false; }
 }
 
+/* ---------- 자동 갱신 (10분) + NEW 배지 ---------- */
+const seenKeys = new Set();
+const keyOf = t => (t||"").replace(/\s+/g,"").slice(0,24);
+function markSeen(arts){ (arts||[]).forEach(a=>seenKeys.add(keyOf(a.title))); }
+function tagNew(arts){
+  (arts||[]).forEach(a=>{ a._new = !seenKeys.has(keyOf(a.title)); });
+  markSeen(arts);
+  return arts;
+}
+
+// 현재 카테고리의 통합 소스 재수집 (유튜브 제외, 전부 무료)
+async function hotSrcsFor(cat){
+  if(cat === "종합"){
+    const r = await Promise.allSettled([ scrapeNaverRanking(), fetchGoogleNews(), etcChainFree() ]);
+    return [
+      {key:"n", label:"네이버", items: r[0].status==="fulfilled"?r[0].value:[]},
+      {key:"e", label:"기타", items: r[2].status==="fulfilled"?r[2].value:[]},
+      {key:"g", label:"구글", items: r[1].status==="fulfilled"?r[1].value:[]}
+    ];
+  }
+  if(cat === "커뮤니티") return communitySrcs();
+  if(cat === "부동산") return realEstateSrcs();
+  if(cat === "외신") return yahooSrcs();
+  if(HOT_CATS[cat]){
+    const conf = HOT_CATS[cat];
+    const r = await Promise.allSettled([ scrapeNateRanking(conf.nate), fetchGoogleTopic(conf.topic, cat) ]);
+    return [
+      {key:"e", label:"네이트", items: r[0].status==="fulfilled"?r[0].value:[]},
+      {key:"g", label:"구글", items: r[1].status==="fulfilled"?r[1].value:[]}
+    ];
+  }
+  return null;
+}
+
+async function autoRefresh(){
+  if(document.hidden) return; // 백그라운드 탭이면 건너뜀
+  // 1) 현재 보고 있는 '지금 뜨는 기사' 탭
+  try{
+    let arts;
+    if(currentTab==='naver') arts = await scrapeNaverRanking();
+    else if(currentTab==='google') arts = await fetchGoogleNews();
+    else if(currentTab==='flash') arts = await flashArticles();
+    else arts = await etcChainFree();
+    if(arts && arts.length){
+      tagNew(arts);
+      const now = new Date();
+      const stamp = now.getHours().toString().padStart(2,'0')+":"+now.getMinutes().toString().padStart(2,'0')+" 기준 · 자동 갱신";
+      tabData[currentTab] = {articles:arts, stamp};
+      renderList();
+      document.getElementById('stamp').textContent = stamp;
+      const nn = arts.filter(a=>a._new).length;
+      document.getElementById('loadStatus').textContent = nn ? "NEW "+nn+"건" : "";
+    }
+  }catch(e){ console.warn("자동 갱신(탭) 실패:", e.message); }
+  // 2) 현재 보고 있는 통합 카테고리 (유튜브 소재 제외 — 유료라서)
+  try{
+    if(hotCat !== "유튜브"){
+      const srcs = await hotSrcsFor(hotCat);
+      if(srcs){
+        const arts = mergeSources(srcs, hotCat);
+        if(arts.length){
+          tagNew(arts);
+          hotArticles = arts;
+          hotCache[hotCat] = {articles:arts, stamp:stampNow()+" · 자동 갱신", statusText:""};
+          renderHot();
+          document.getElementById('hotStamp').textContent = hotCache[hotCat].stamp;
+        }
+      }
+    }
+  }catch(e){ console.warn("자동 갱신(통합) 실패:", e.message); }
+}
+setInterval(autoRefresh, 10*60*1000); // 10분마다
+
 async function preloadAll(){
   const hadCache = loadSessionCache();
   const listStatus = document.getElementById('loadStatus');
@@ -2540,6 +2666,7 @@ async function preloadAll(){
 
   // 소스가 도착하는 즉시 해당 탭에 반영 (전체 완료를 기다리지 않음)
   function applyTab(tab, arts){
+    markSeen(arts);
     if(!arts || !arts.length) return;
     tabData[tab] = {articles: arts, stamp: stampNow()};
     if(currentTab === tab){
@@ -2570,7 +2697,8 @@ async function preloadAll(){
       const arts = mergeSources(srcs, cat);
       if(!arts.length) return;
       const failed = srcs.filter(s=>!s.items.length).map(s=>s.label);
-      hotCache[cat] = {articles: arts, stamp: stampNow(), statusText: failed.length ? (failed.join("·")+" 제외") : ""};
+      markSeen(arts);
+        hotCache[cat] = {articles: arts, stamp: stampNow(), statusText: failed.length ? (failed.join("·")+" 제외") : ""};
       if(hotCat === cat){
         hotArticles = arts; renderHot();
         document.getElementById('hotStamp').textContent = hotCache[cat].stamp;
@@ -2586,6 +2714,7 @@ async function preloadAll(){
       const srcs = await realEstateSrcs();
       const arts = mergeSources(srcs, "부동산");
       if(!arts.length) return;
+      markSeen(arts);
       hotCache["부동산"] = {articles:arts, stamp:stampNow(), statusText:""};
       if(hotCat === "부동산"){
         hotArticles = arts; renderHot();
@@ -2604,6 +2733,7 @@ async function preloadAll(){
       const arts = mergeSources(srcs, "외신");
       if(!arts.length) return;
       const failed = srcs.filter(s=>!s.items.length).map(s=>s.label);
+      markSeen(arts);
       hotCache["외신"] = {articles:arts, stamp:stampNow(), statusText: failed.length ? (failed.join("·")+" 제외") : ""};
       if(hotCat === "외신"){
         hotArticles = arts; renderHot();
@@ -2622,6 +2752,7 @@ async function preloadAll(){
       const arts = mergeSources(srcs, "커뮤니티");
       if(!arts.length) return;
       const failed = srcs.filter(s=>!s.items.length).map(s=>s.label);
+      markSeen(arts);
       hotCache["커뮤니티"] = {articles:arts, stamp:stampNow(), statusText: failed.length ? (failed.join("·")+" 제외") : ""};
       if(hotCat === "커뮤니티"){
         hotArticles = arts; renderHot();
@@ -2644,7 +2775,8 @@ async function preloadAll(){
     ];
     const arts = mergeSources(srcs, "종합");
     const failed = srcs.filter(s=>!s.items.length).map(s=>s.label);
-    hotCache["종합"] = {articles: arts, stamp: stampNow(), statusText: failed.length ? (failed.join("·")+" 제외") : ""};
+    markSeen(arts);
+      hotCache["종합"] = {articles: arts, stamp: stampNow(), statusText: failed.length ? (failed.join("·")+" 제외") : ""};
     if(hotCat === "종합"){
       hotArticles = arts; renderHot();
       document.getElementById('hotStamp').textContent = hotCache["종합"].stamp;
