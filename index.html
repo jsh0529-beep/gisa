@@ -308,6 +308,7 @@
         <button class="chip" data-cat="부동산" onclick="switchHotCat('부동산')">부동산</button>
         <button class="chip" data-cat="외신" onclick="switchHotCat('외신')">외신</button>
         <button class="chip" data-cat="커뮤니티" onclick="switchHotCat('커뮤니티')">커뮤</button>
+        <button class="chip" data-cat="블라인드" onclick="switchHotCat('블라인드')">블라인드</button>
         <button class="chip" data-cat="유튜브" onclick="switchHotCat('유튜브')">유튜브 소재</button>
       </div>
       <span class="stamp" id="hotStatus"></span>
@@ -2116,11 +2117,11 @@ async function realEstateSrcs(){
   ];
 }
 
-// 블라인드 핫 게시글 (웹 SEO 렌더링 페이지에서 수집 — 차단 시 자동 제외)
+// 블라인드 토픽 베스트 (실패 시 메인 페이지 폴백)
 async function scrapeBlindHot(){
   let doc;
-  try{ doc = await fetchDoc("https://www.teamblind.com/kr/"); }
-  catch(e){ doc = await fetchDoc("https://www.teamblind.com/kr/topics"); }
+  try{ doc = await fetchDoc("https://www.teamblind.com/kr/topics/%ED%86%A0%ED%94%BD-%EB%B2%A0%EC%8A%A4%ED%8A%B8"); }
+  catch(e){ doc = await fetchDoc("https://www.teamblind.com/kr/"); }
   const out = [], seen = new Set();
   doc.querySelectorAll("a").forEach(a=>{
     if(out.length>=10) return;
@@ -2140,13 +2141,18 @@ async function scrapeBlindHot(){
 
 // 커뮤니티 3곳 병렬 수집 → 소스 배열 반환
 async function communitySrcs(){
-  const r = await Promise.allSettled([ scrapePannRanking(), scrapeBlindHot(), scrapeRuliwebBest(), scrapeTodayhumor() ]);
+  const r = await Promise.allSettled([ scrapePannRanking(), scrapeRuliwebBest(), scrapeTodayhumor() ]);
   return [
     {key:"e", label:"네이트판", items: r[0].status==="fulfilled" ? r[0].value : []},
-    {key:"n", label:"블라인드", items: r[1].status==="fulfilled" ? r[1].value : []},
-    {key:"g", label:"루리웹",   items: r[2].status==="fulfilled" ? r[2].value : []},
-    {key:"e", label:"오유",     items: r[3].status==="fulfilled" ? r[3].value : []}
+    {key:"g", label:"루리웹",   items: r[1].status==="fulfilled" ? r[1].value : []},
+    {key:"n", label:"오유",     items: r[2].status==="fulfilled" ? r[2].value : []}
   ];
+}
+
+// 블라인드 전용 소스 (토픽 베스트)
+async function blindSrcs(){
+  const items = await scrapeBlindHot();
+  return [ {key:"n", label:"블라인드", items} ];
 }
 
 // 네이버 속보 리스트 (SSR 페이지 직접 수집)
@@ -2202,7 +2208,7 @@ function buildPool(){
   let pool = [];
   // 탭 4개 + 통합 카테고리 캐시 전부
   ['naver','google','etc','flash'].forEach(k=>{ if(tabData[k] && tabData[k].articles) pool = pool.concat(tabData[k].articles); });
-  ["종합","정치","경제","사회","연예","스포츠","부동산","외신","커뮤니티"].forEach(c=>{
+  ["종합","정치","경제","사회","연예","스포츠","부동산","외신","커뮤니티","블라인드"].forEach(c=>{
     const h = hotCache[c];
     if(h && h.articles) pool = pool.concat(h.articles);
   });
@@ -2373,7 +2379,7 @@ function isSameTopic(a, b){
 async function youtubePicks(){
   // 이미 수집된 전 카테고리 기사를 후보 풀로 구성
   let pool = [];
-  ["종합","정치","경제","사회","연예","스포츠","부동산","외신","커뮤니티"].forEach(c=>{
+  ["종합","정치","경제","사회","연예","스포츠","부동산","외신","커뮤니티","블라인드"].forEach(c=>{
     const h = hotCache[c];
     if(h && h.articles) pool = pool.concat(h.articles);
   });
@@ -2485,6 +2491,8 @@ async function loadHot(force){
     srcs = await realEstateSrcs();
   }else if(cat === "외신"){
     srcs = await yahooSrcs();
+  }else if(cat === "블라인드"){
+    srcs = await blindSrcs();
   }else{
     const conf = HOT_CATS[cat];
     const r = await Promise.allSettled([ scrapeNateRanking(conf.nate), fetchGoogleTopic(conf.topic, cat) ]);
@@ -2624,6 +2632,7 @@ async function hotSrcsFor(cat){
     ];
   }
   if(cat === "커뮤니티") return communitySrcs();
+  if(cat === "블라인드") return blindSrcs();
   if(cat === "부동산") return realEstateSrcs();
   if(cat === "외신") return yahooSrcs();
   if(HOT_CATS[cat]){
