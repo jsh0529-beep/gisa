@@ -332,6 +332,21 @@
     </ul>
   </section>
 
+  <!-- 주목 기자 오늘 기사 -->
+  <section class="panel">
+    <div class="panel-head">
+      <h2>📌 주목 기자 오늘 기사</h2>
+      <span class="stamp" id="watchStamp">—</span>
+    </div>
+    <div class="toolbar">
+      <button class="btn" id="btnWatch" onclick="loadWatch()">불러오기</button>
+      <span class="stamp" id="watchStatus">디뉴스팀 참고 기자 16인의 당일 기사 · 무료</span>
+    </div>
+    <ul class="list" id="watchList" style="max-height:520px">
+      <li class="empty" style="padding:26px 20px">바이럴 감각이 검증된 기자들이 오늘 무엇을 썼는지<br>네이버 기자페이지에서 직접 모아옵니다.</li>
+    </ul>
+  </section>
+
   </div><!-- /leftcol -->
 
   <!-- 오른쪽: 재구성 데스크 -->
@@ -1087,7 +1102,7 @@ function selectArticle(i){
   selected = tabData[currentTab].articles[i];
   selectedTab = currentTab;
   selectedIndex = i;
-  document.querySelectorAll('#hotList .item, #predList .item').forEach(el=>el.classList.remove('sel'));
+  document.querySelectorAll('#hotList .item, #predList .item, #watchList .item').forEach(el=>el.classList.remove('sel'));
   document.querySelectorAll('#list .item').forEach((el,idx)=>el.classList.toggle('sel', idx===i));
   document.getElementById('noSel').style.display = 'none';
   const box = document.getElementById('selbox');
@@ -2364,8 +2379,147 @@ function renderPred(){
 function selectPred(i){
   selected = predArticles[i];
   selectedTab = null; selectedIndex = -1;
-  document.querySelectorAll('#list .item, #hotList .item').forEach(el=>el.classList.remove('sel'));
+  document.querySelectorAll('#list .item, #hotList .item, #watchList .item').forEach(el=>el.classList.remove('sel'));
   document.querySelectorAll('#predList .item').forEach((el,idx)=>el.classList.toggle('sel', idx===i));
+  document.getElementById('noSel').style.display = 'none';
+  document.getElementById('selbox').style.display = 'block';
+  document.getElementById('selTitle').textContent = selected.title;
+  const a = document.getElementById('selUrl');
+  a.textContent = selected.url||"";
+  a.href = selected.url||"#";
+  document.getElementById('pressText').value = "";
+  document.getElementById('urlInput').value = "";
+  document.getElementById('urlStatus').style.display = 'none';
+  document.getElementById('btnWrite').disabled = false;
+  document.getElementById('btnBroadcast').disabled = false;
+  document.getElementById('btnBlog').disabled = false;
+  document.getElementById('btnSns').disabled = false;
+  document.getElementById('output').classList.remove('show');
+  document.getElementById('writeErr').innerHTML = "";
+  updateWriteButtons();
+}
+
+/* ---------- 주목 기자 오늘 기사 (네이버 기자페이지 직접 수집, 무료) ---------- */
+const WATCH_REPORTERS = [
+  {press:"서울신문", name:"이정수", url:"https://media.naver.com/journalist/081/29796"},
+  {press:"서울신문", name:"하승연", url:"https://media.naver.com/journalist/081/80817"},
+  {press:"뉴스1", name:"신초롱", url:"https://media.naver.com/journalist/421/79064"},
+  {press:"뉴스1", name:"김학진", url:"https://media.naver.com/journalist/421/29331"},
+  {press:"한겨레", name:"송경화", url:"https://media.naver.com/journalist/028/73446"},
+  {press:"시사저널", name:"김민지", url:"https://media.naver.com/journalist/586/81192"},
+  {press:"경기일보", name:"허나우", url:"https://media.naver.com/journalist/666/82903"},
+  {press:"경기일보", name:"손종욱", url:"https://media.naver.com/journalist/666/82900"},
+  {press:"CJB청주방송", name:"이환", url:"https://media.naver.com/journalist/655/81986"},
+  {press:"강원일보", name:"이정훈", url:"https://media.naver.com/journalist/087/73384"},
+  {press:"강원일보", name:"조성호", url:"https://media.naver.com/journalist/087/78182"},
+  {press:"중앙일보", name:"신혜연", url:"https://media.naver.com/journalist/025/72583"},
+  {press:"문화일보", name:"이근홍", url:"https://media.naver.com/journalist/021/75899"},
+  {press:"머니투데이", name:"전형주", url:"https://media.naver.com/journalist/008/76456"},
+  {press:"머니투데이", name:"남형도", url:"https://media.naver.com/journalist/008/31440"},
+  {press:"동아일보", name:"김예슬", url:"https://media.naver.com/journalist/020/78674"}
+];
+let watchArticles = [];
+
+async function fetchReporterToday(rep){
+  const doc = await fetchDoc(rep.url);
+  const out = [], seen = new Set();
+  doc.querySelectorAll("a").forEach(a=>{
+    if(out.length >= 5) return;
+    const href = a.getAttribute("href")||"";
+    if(!/n\.news\.naver\.com\/(mnews\/)?article\/|news\.naver\.com\/main\/read/.test(href)) return;
+    const t = cleanTitle(a.textContent);
+    if(t.length < 10 || seen.has(t)) return;
+    seen.add(t);
+    let time = "";
+    const wrap = a.closest("li,div,article");
+    if(wrap){
+      const m = (wrap.textContent||"").match(/(방금|\d+\s*분\s*전|\d+\s*시간\s*전|어제|\d{4}\.\s?\d{1,2}\.\s?\d{1,2}\.?)/);
+      if(m) time = m[1].replace(/\s+/g,"");
+    }
+    out.push({
+      title:t,
+      url: href.startsWith("/") ? "https://n.news.naver.com"+href : href,
+      time,
+      outlet: rep.press+" "+rep.name+" 기자",
+      category: rep.press,
+      summary:"", potential:"중간",
+      _sort: /방금/.test(time) ? 0
+           : /분전/.test(time) ? (parseInt(time)||1)
+           : /시간전/.test(time) ? (parseInt(time)||1)*60
+           : 100000
+    });
+  });
+  // 당일 기사만: 방금 / N분전 / N시간전 / 오늘 날짜
+  const d = new Date();
+  const ds1 = d.getFullYear()+"."+String(d.getMonth()+1).padStart(2,"0")+"."+String(d.getDate()).padStart(2,"0");
+  const ds2 = d.getFullYear()+"."+(d.getMonth()+1)+"."+d.getDate();
+  return out.filter(a=>/방금|분전|시간전/.test(a.time) || a.time.startsWith(ds1) || a.time.startsWith(ds2));
+}
+
+async function loadWatch(){
+  const btn = document.getElementById('btnWatch');
+  const status = document.getElementById('watchStatus');
+  const ul = document.getElementById('watchList');
+  btn.disabled = true;
+  status.textContent = "16개 기자페이지 수집 중…";
+  ul.innerHTML = '<li class="empty" style="padding:26px 20px"><div class="loading" style="justify-content:center"><div class="spinner"></div>기자페이지를 도는 중…</div></li>';
+  try{
+    const r = await Promise.allSettled(WATCH_REPORTERS.map(fetchReporterToday));
+    let all = [];
+    r.forEach(res=>{ if(res.status==="fulfilled") all = all.concat(res.value); });
+    // 같은 기사 중복 제거 + 최신순
+    const uniq = [];
+    for(const a of all){
+      if(uniq.some(u=>isSameTopic(u.title, a.title))) continue;
+      uniq.push(a);
+    }
+    uniq.sort((a,b)=>a._sort-b._sort);
+    watchArticles = uniq.slice(0,20);
+    const okCnt = r.filter(x=>x.status==="fulfilled").length;
+    if(!watchArticles.length){
+      ul.innerHTML = '<li class="empty" style="padding:26px 20px">오늘 올라온 기사가 아직 없거나 수집에 실패했습니다.<br><span style="font-size:11px">기자페이지 응답: '+okCnt+'/16</span></li>';
+    }else{
+      renderWatch();
+    }
+    const now = new Date();
+    document.getElementById('watchStamp').textContent =
+      now.getHours().toString().padStart(2,'0')+":"+now.getMinutes().toString().padStart(2,'0')+" 기준";
+    status.textContent = okCnt < 16 ? "기자페이지 "+okCnt+"/16 응답" : "";
+  }catch(err){
+    console.error(err);
+    ul.innerHTML = '<li class="empty" style="padding:26px 20px">수집 실패 — 잠시 후 다시 시도하세요.</li>';
+    status.textContent = "";
+  }finally{
+    btn.disabled = false;
+  }
+}
+
+function renderWatch(){
+  const ul = document.getElementById('watchList');
+  ul.innerHTML = "";
+  watchArticles.forEach((a,i)=>{
+    const li = document.createElement('li');
+    li.className = 'item';
+    li.onclick = ()=>selectWatch(i);
+    li.innerHTML =
+      '<div class="rank">'+String(i+1).padStart(2,'0')+'</div>'+
+      '<div><div class="t"></div>'+
+      '<div class="m"><span class="cat"></span><span class="outlet"></span><span class="time"></span></div></div>';
+    li.querySelector('.t').textContent = a.title||"";
+    li.querySelector('.cat').textContent = a.category||"";
+    li.querySelector('.outlet').textContent = a.outlet||"";
+    const tEl = li.querySelector('.time');
+    tEl.textContent = a.time ? a.time.replace(/(분|시간)전/,"$1 전") : "";
+    if(/분|시간|방금/.test(a.time||"")) tEl.classList.add('fresh');
+    ul.appendChild(li);
+  });
+}
+
+function selectWatch(i){
+  selected = watchArticles[i];
+  selectedTab = null; selectedIndex = -1;
+  document.querySelectorAll('#list .item, #hotList .item, #predList .item').forEach(el=>el.classList.remove('sel'));
+  document.querySelectorAll('#watchList .item').forEach((el,idx)=>el.classList.toggle('sel', idx===i));
   document.getElementById('noSel').style.display = 'none';
   document.getElementById('selbox').style.display = 'block';
   document.getElementById('selTitle').textContent = selected.title;
@@ -2605,7 +2759,7 @@ function renderHot(){
 function selectHot(i){
   selected = hotArticles[i];
   selectedTab = null; selectedIndex = -1;
-  document.querySelectorAll('#list .item, #predList .item').forEach(el=>el.classList.remove('sel'));
+  document.querySelectorAll('#list .item, #predList .item, #watchList .item').forEach(el=>el.classList.remove('sel'));
   document.querySelectorAll('#hotList .item').forEach((el,idx)=>el.classList.toggle('sel', idx===i));
   document.getElementById('noSel').style.display = 'none';
   document.getElementById('selbox').style.display = 'block';
