@@ -2312,59 +2312,42 @@ async function scrapeNaverDisasterMsg(){
   return out;
 }
 
-// 재난안전데이터 공유플랫폼 재난문자 (safetydata.go.kr) — NO/제목/등록일 표 구조
+// 재난안전데이터 공유플랫폼 재난문자 — 실제 페이지 구조(cell-no/cell-subject/cell-date) 기준
 async function scrapeSafetyData(){
-  const raw = await fetchRaw("https://www.safetydata.go.kr/disaster-data/disasterNotification");
+  const doc = await fetchDoc("https://www.safetydata.go.kr/disaster-data/disasterNotification");
   const out = [], seen = new Set();
-  const push = (title, time)=>{
-    if(out.length>=10 || !title) return;
-    let t = title.replace(/\s+/g," ").trim();
-    t = t.replace(/N$/,"").trim();                      // 새글 표시 N 제거
-    let region = "";
-    const rm = t.match(/\[([^\]]{2,15})\]\s*$/);       // 꼬리 [지역명] 추출
-    if(rm){ region = rm[1]; t = t.slice(0, rm.index).trim(); }
+
+  // 확인된 구조: <td class="cell-no">번호</td><td class="cell-subject"><a href="...Detail?sn=...">내용[지역]</a></td><td class="cell-date">YYYY/MM/DD HH:MM:SS</td>
+  const rows = doc.querySelectorAll("table tbody tr");
+  rows.forEach(tr=>{
+    if(out.length>=10) return;
+    const subj = tr.querySelector("td.cell-subject a, td.board-list-new a, td:nth-child(2) a");
+    const dateTd = tr.querySelector("td.cell-date, td:nth-child(3)");
+    if(!subj) return;
+    let t = (subj.textContent||"").replace(/\s+/g," ").trim();
     if(t.length < 10) return;
+    let region = "";
+    const rm = t.match(/\[([^\]]{2,15})\]\s*$/);
+    if(rm){ region = rm[1]; t = t.slice(0, rm.index).trim(); }
     const key = t.replace(/\s/g,"").slice(0,40);
-    if(seen.has(key)) return;                            // 같은 문자 중복(연속 재발송) 제거
+    if(seen.has(key)) return; // 동일 문자 재발송 중복 제거
     seen.add(key);
+    let time = "";
+    if(dateTd){
+      const dm = (dateTd.textContent||"").match(/\d{4}\/(\d{2}\/\d{2})\s+(\d{2}:\d{2})/);
+      if(dm) time = dm[1]+" "+dm[2];
+    }
+    const href = subj.getAttribute("href")||"";
     out.push({
       title: t.length > 80 ? t.slice(0,80)+"…" : t,
       outlet: "재난문자" + (region ? " · "+region : ""),
-      url: "https://www.safetydata.go.kr/disaster-data/disasterNotification",
-      time: (time||"").trim(),
-      category:"재난문자", summary:"", potential:"높음"
+      url: href ? (href.startsWith("/") ? "https://www.safetydata.go.kr"+href : href)
+                : "https://www.safetydata.go.kr/disaster-data/disasterNotification",
+      time, category:"재난문자", summary:"", potential:"높음"
     });
-  };
-
-  // 전략 A: 표 파싱 — NO / 제목 / 등록일(YYYY/MM/DD HH:MM:SS)
-  const doc = new DOMParser().parseFromString(raw, "text/html");
-  doc.querySelectorAll("table tr").forEach(tr=>{
-    const tds = tr.querySelectorAll("td");
-    if(tds.length < 3) return;
-    const no = (tds[0].textContent||"").trim();
-    if(!/^\d+$/.test(no)) return;                       // 헤더·페이지네이션 행 제외
-    const title = tds[1].textContent||"";
-    const dm = (tds[2].textContent||"").match(/(\d{4}[\/.\-]\d{2}[\/.\-]\d{2})\s*(\d{2}:\d{2})?/);
-    push(title, dm ? (dm[1].slice(5).replace(/[\/.\-]/,"/")+(dm[2] ? " "+dm[2] : "")) : "");
   });
 
-  // 전략 B: 표 구조가 아니면 텍스트 줄 단위 — "번호 내용[지역]N 날짜" 패턴
-  if(out.length < 2){
-    const lines = (doc.body ? doc.body.textContent : raw).split(/\n+/);
-    lines.forEach(line=>{
-      const m = line.match(/^\s*\d{3,}\s+(.{15,250}?)\s*(\d{4}[\/.\-]\d{2}[\/.\-]\d{2})\s*(\d{2}:\d{2})?/);
-      if(m) push(m[1], m[2].slice(5)+(m[3] ? " "+m[3] : ""));
-    });
-  }
-
-  // 전략 C: 내장 JSON (표준 필드)
-  if(out.length < 2){
-    const msgs = [...raw.matchAll(/"(?:MSG_CN|msgCn)"\s*:\s*"((?:[^"\\]|\\.)*)"/g)].map(x=>x[1]);
-    const dates = [...raw.matchAll(/"(?:CRT_DT|REG_YMD|crtDt|regYmd)"\s*:\s*"([^"]+)"/g)].map(x=>x[1]);
-    msgs.forEach((msg,i)=>push(msg.replace(/\\n/g," ").replace(/\\"/g,'"'), (dates[i]||"").replace(/T/," ").slice(5,16)));
-  }
-
-  if(out.length < 2) throw new Error("safetydata 파싱 실패");
+  if(out.length < 2) throw new Error("safetydata 표를 찾지 못함 (중계 서버 차단 가능성)");
   return out;
 }
 
