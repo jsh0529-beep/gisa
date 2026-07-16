@@ -431,7 +431,7 @@
           <img id="genImg" alt="기사 이미지" style="width:100%;border-radius:8px;border:1px solid var(--line);display:block">
           <div id="imgCaption" class="imgcap" style="display:none" title="클릭하면 복사됩니다"></div>
           <div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-            <button class="btn ghost" style="padding:6px 12px;font-size:12px" onclick="downloadImage()">4K PNG 다운로드 (3840×2160)</button>
+            <button class="btn ghost" style="padding:6px 12px;font-size:12px" onclick="downloadImage()">4K JPG 다운로드 (3840×2160)</button>
             <button class="btn ghost" style="padding:6px 12px;font-size:12px" onclick="generateArticleImage()">다시 생성</button>
             <span class="stamp" id="imgInfo"></span>
           </div>
@@ -1913,13 +1913,22 @@ function downloadImage(){
     ctx.fillStyle = "rgba(255,255,255,0.92)";
     ctx.textBaseline = "top";
     ctx.fillText(label, W - tw - pad - mx, H - 54 - pad - my + 14);
-    canvas.toBlob((blob)=>{
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = "article-image-4k.png";
-      a.click();
-      setTimeout(()=>URL.revokeObjectURL(a.href), 5000);
-    }, "image/png");
+    // JPG로 저장 (보도사진 표준 포맷) — 8MB 이하가 될 때까지 품질 자동 조절
+    const LIMIT = 8 * 1024 * 1024;
+    const tryExport = (quality)=>{
+      canvas.toBlob((blob)=>{
+        if(blob && blob.size > LIMIT && quality > 0.6){
+          tryExport(quality - 0.08); // 용량 초과 시 품질 한 단계 낮춰 재시도
+          return;
+        }
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = "article-image-4k.jpg";
+        a.click();
+        setTimeout(()=>URL.revokeObjectURL(a.href), 5000);
+      }, "image/jpeg", quality);
+    };
+    tryExport(0.92);
   };
   src.src = "data:"+lastImgMime+";base64,"+lastImgB64;
 }
