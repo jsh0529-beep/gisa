@@ -321,6 +321,7 @@
         <button class="chip" data-cat="연예" onclick="switchHotCat('연예')">연예</button>
         <button class="chip" data-cat="스포츠" onclick="switchHotCat('스포츠')">스포츠</button>
         <button class="chip" data-cat="부동산" onclick="switchHotCat('부동산')">부동산</button>
+        <button class="chip" data-cat="재난사고" onclick="switchHotCat('재난사고')">재난·사고</button>
         <button class="chip" data-cat="외신" onclick="switchHotCat('외신')">외신</button>
         <button class="chip" data-cat="커뮤니티" onclick="switchHotCat('커뮤니티')">커뮤</button>
         <button class="chip" data-cat="블라인드" onclick="switchHotCat('블라인드')">블라인드</button>
@@ -2211,6 +2212,75 @@ async function scrapeBlindHot(){
   return out;
 }
 
+// 기상청 기상특보 RSS (주소 후보 체인)
+async function fetchKmaWarning(){
+  const urls = [
+    "https://www.kma.go.kr/wid/rss/warning/kma_warning.xml",
+    "https://www.weather.go.kr/w/rss/warning.do",
+    "https://www.kma.go.kr/weather/warning/rss.jsp"
+  ];
+  for(const u of urls){
+    try{
+      const arts = await fetchRssFeed(u, "기상특보");
+      arts.forEach(a=>{ if(!a.outlet) a.outlet = "기상청"; a.potential = "높음"; });
+      return arts;
+    }catch(e){ console.warn("기상청 RSS 실패:", u); }
+  }
+  throw new Error("기상청 RSS 전체 실패");
+}
+
+// 네이버 재난문자 (검색 위젯 페이지에서 수집 — 구조 변경 시 자동 제외)
+async function scrapeNaverDisasterMsg(){
+  let doc;
+  try{ doc = await fetchDoc("https://m.search.naver.com/search.naver?query=%EC%9E%AC%EB%82%9C%EB%AC%B8%EC%9E%90"); }
+  catch(e){ doc = await fetchDoc("https://search.naver.com/search.naver?query=%EC%9E%AC%EB%82%9C%EB%AC%B8%EC%9E%90"); }
+  const out = [], seen = new Set();
+  // 발신기관 [OO시·도·군·구·청·처·부·본부] 패턴이 있는 텍스트 블록 = 재난문자
+  const senderRx = /\[([^\]]{2,20}(?:시|도|군|구|청|처|부|본부|공사|재난|안전))\]/;
+  const timeRx = /(\d{1,2}\s*[:.]\s*\d{2})/;
+  doc.querySelectorAll("li,p,div,span").forEach(el=>{
+    if(out.length >= 10) return;
+    // 자식에 같은 패턴이 또 있으면(조상 중복) 건너뜀 — 가장 안쪽 요소만
+    if(el.children.length > 3) return;
+    const raw = (el.textContent||"").replace(/\s+/g," ").trim();
+    if(raw.length < 20 || raw.length > 300) return;
+    const sm = raw.match(senderRx);
+    if(!sm) return;
+    // 재난문자다운 내용 키워드 확인
+    if(!/특보|주의보|경보|대피|안전|호우|태풍|지진|폭염|한파|대설|화재|통제|발령|재난/.test(raw)) return;
+    const body = raw.replace(/\d{2,4}\.\s?\d{1,2}\.\s?\d{1,2}\.?/,"").trim();
+    const key = body.replace(/\s/g,"").slice(0,40);
+    if(seen.has(key)) return;
+    seen.add(key);
+    const tm = raw.match(timeRx);
+    out.push({
+      title: body.length > 70 ? body.slice(0,70)+"…" : body,
+      outlet: "재난문자 · "+sm[1],
+      url: "https://m.search.naver.com/search.naver?query=%EC%9E%AC%EB%82%9C%EB%AC%B8%EC%9E%90",
+      time: tm ? tm[1].replace(/\s/g,"") : "",
+      category: "재난문자", summary:"", potential:"높음"
+    });
+  });
+  if(out.length < 2) throw new Error("네이버 재난문자 파싱 실패");
+  return out;
+}
+
+// 재난특보 + 사고속보 통합 소스
+async function disasterSrcs(){
+  const r = await Promise.allSettled([
+    scrapeNaverDisasterMsg(),
+    fetchKmaWarning(),
+    fetchGoogleFeed(gnSearchUrl("기상특보 OR 호우경보 OR 태풍 OR 대설 OR 폭염경보 OR 지진 OR 재난문자"), "재난특보"),
+    fetchGoogleFeed(gnSearchUrl("사고 속보 OR 화재 OR 붕괴 OR 추돌 OR 전복 OR 매몰"), "사고속보")
+  ]);
+  return [
+    {key:"n", label:"재난문자",   items: r[0].status==="fulfilled" ? r[0].value : []},
+    {key:"n", label:"기상청 특보", items: r[1].status==="fulfilled" ? r[1].value : []},
+    {key:"e", label:"재난",       items: r[2].status==="fulfilled" ? r[2].value : []},
+    {key:"g", label:"사고",       items: r[3].status==="fulfilled" ? r[3].value : []}
+  ];
+}
+
 // 커뮤니티 3곳 병렬 수집 → 소스 배열 반환
 async function communitySrcs(){
   const r = await Promise.allSettled([ scrapePannRanking(), scrapeRuliwebBest(), scrapeTodayhumor() ]);
@@ -2280,7 +2350,7 @@ function buildPool(){
   let pool = [];
   // 탭 4개 + 통합 카테고리 캐시 전부
   ['naver','google','etc','flash'].forEach(k=>{ if(tabData[k] && tabData[k].articles) pool = pool.concat(tabData[k].articles); });
-  ["종합","정치","경제","사회","연예","스포츠","부동산","외신","커뮤니티","블라인드"].forEach(c=>{
+  ["종합","정치","경제","사회","연예","스포츠","부동산","외신","커뮤니티","블라인드","재난사고"].forEach(c=>{
     const h = hotCache[c];
     if(h && h.articles) pool = pool.concat(h.articles);
   });
@@ -2590,7 +2660,7 @@ function isSameTopic(a, b){
 async function youtubePicks(){
   // 이미 수집된 전 카테고리 기사를 후보 풀로 구성
   let pool = [];
-  ["종합","정치","경제","사회","연예","스포츠","부동산","외신","커뮤니티","블라인드"].forEach(c=>{
+  ["종합","정치","경제","사회","연예","스포츠","부동산","외신","커뮤니티","블라인드","재난사고"].forEach(c=>{
     const h = hotCache[c];
     if(h && h.articles) pool = pool.concat(h.articles);
   });
@@ -2704,6 +2774,8 @@ async function loadHot(force){
     srcs = await yahooSrcs();
   }else if(cat === "블라인드"){
     srcs = await blindSrcs();
+  }else if(cat === "재난사고"){
+    srcs = await disasterSrcs();
   }else{
     const conf = HOT_CATS[cat];
     const r = await Promise.allSettled([ scrapeNateRanking(conf.nate), fetchGoogleTopic(conf.topic, cat) ]);
@@ -2844,6 +2916,7 @@ async function hotSrcsFor(cat){
   }
   if(cat === "커뮤니티") return communitySrcs();
   if(cat === "블라인드") return blindSrcs();
+  if(cat === "재난사고") return disasterSrcs();
   if(cat === "부동산") return realEstateSrcs();
   if(cat === "외신") return yahooSrcs();
   if(HOT_CATS[cat]){
