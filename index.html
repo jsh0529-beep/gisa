@@ -141,6 +141,10 @@
   .time.fresh{color:#1D6FE0;font-weight:700}
   .gradehot{background:var(--hot);color:#fff;padding:1px 7px;border-radius:3px;font-weight:700}
   .gradehigh{background:#FDEEED;color:var(--hot);padding:1px 7px;border-radius:3px;font-weight:600;border:1px solid #F2C2BF}
+  .chip{position:relative}
+  .chip .adot{position:absolute;top:-6px;right:-6px;background:var(--hot);color:#fff;
+    font-size:10px;font-weight:800;min-width:16px;height:16px;line-height:16px;border-radius:8px;
+    text-align:center;padding:0 3px;box-shadow:0 0 0 2px #fff}
   .item .s{font-size:12px;color:var(--ink-soft);margin-top:4px;line-height:1.45}
 
   .empty{padding:44px 20px;text-align:center;color:var(--ink-soft);font-size:13px;line-height:1.7}
@@ -2714,6 +2718,7 @@ const HOT_CATS = {
 function switchHotCat(cat){
   hotCat = cat;
   document.querySelectorAll('.chip').forEach(c=>c.classList.toggle('on', c.dataset.cat===cat));
+  if(cat === "재난사고") setDisasterBadge(0);
   const cached = hotCache[cat];
   if(cached){
     hotArticles = cached.articles;
@@ -3052,6 +3057,39 @@ async function autoRefresh(){
   }catch(e){ console.warn("자동 갱신(통합) 실패:", e.message); }
 }
 setInterval(autoRefresh, 10*60*1000); // 10분마다
+
+// 재난문자는 별도 상시 감시: 어떤 칩을 보고 있든 3분마다 재수집
+function setDisasterBadge(n){
+  const chip = document.querySelector('.chip[data-cat="재난사고"]');
+  if(!chip) return;
+  let dot = chip.querySelector('.adot');
+  if(n > 0){
+    if(!dot){ dot = document.createElement('span'); dot.className = 'adot'; chip.appendChild(dot); }
+    dot.textContent = n > 9 ? '9+' : n;
+  }else if(dot){ dot.remove(); }
+}
+
+async function disasterWatch(){
+  if(document.hidden) return;
+  try{
+    const srcs = await disasterSrcs();
+    const arts = mergeSources(srcs, "재난사고");
+    if(!arts.length) return;
+    tagNew(arts);
+    const newCnt = arts.filter(a=>a._new).length;
+    hotCache["재난사고"] = {articles:arts, stamp:stampNow()+" · 자동 갱신", statusText:""};
+    if(hotCat === "재난사고"){
+      hotArticles = arts;
+      renderHot();
+      document.getElementById('hotStamp').textContent = hotCache["재난사고"].stamp;
+      setDisasterBadge(0);
+    }else if(newCnt > 0){
+      setDisasterBadge(newCnt); // 다른 칩 보는 중 새 재난문자 도착 알림
+    }
+  }catch(e){ console.warn("재난문자 감시 실패:", e.message); }
+}
+setInterval(disasterWatch, 3*60*1000); // 3분마다
+setTimeout(disasterWatch, 2500);       // 페이지 열자마자 1회 수집
 
 async function preloadAll(){
   const hadCache = loadSessionCache();
