@@ -1508,9 +1508,34 @@ function preClean(text){
   return text;
 }
 
+// 본문이 문단 구분 없이 한 덩어리로 온 경우 문장 단위로 잘라 2~3문장씩 문단 재구성
+function reflowBody(text){
+  const lines = text.split("\n").filter(l=>l.trim());
+  const plain = text.replace(/\s/g,"").length;
+  if(lines.length >= 3 || plain < 250) return text; // 문단이 이미 있거나 짧으면 그대로
+  // 종결부(다. 요. 함." 등) 뒤에 분리 표식을 심고 자르기 (구형 브라우저 호환)
+  const marked = text.replace(/\n+/g," ")
+    .replace(/([다요죠임음됨함]\.|[.!?]["'\u201D\u2019])\s+/g, "$1\u0001");
+  const sentences = marked.split("\u0001").map(s=>s.trim()).filter(Boolean);
+  if(sentences.length < 4) return text;
+  const paras = [];
+  let buf = [];
+  sentences.forEach((s, i)=>{
+    buf.push(s);
+    // 2~3문장씩 묶되, 짧은 문장이 연속이면 3문장까지
+    const size = buf.join(" ").length;
+    if(buf.length >= 3 || (buf.length >= 2 && size > 120) || i === sentences.length-1){
+      paras.push(buf.join(" "));
+      buf = [];
+    }
+  });
+  if(buf.length) paras.push(buf.join(" "));
+  return paras.join("\n");
+}
+
 function renderArticle(text, mode){
   const parsed = parseSections(preClean(text));
-  const body = normalizeBody(parsed.art);
+  const body = reflowBody(normalizeBody(parsed.art));
   const anchor = parsed.anchor ? normalizeBody("0.\n0.\n"+parsed.anchor).split("\n").slice(2).join("\n") : "";
 
   // 복사본 구성: 방송 모드면 앵커 멘트 + 리포트를 함께
@@ -2008,6 +2033,7 @@ async function polishArticle(){
 
 /* ---------- 팩트 권장 수정 원클릭 적용 ---------- */
 function renderBodyOnly(){
+  articleRaw = reflowBody(articleRaw);
   const box = document.getElementById('articleBody');
   box.innerHTML = "";
   articleRaw.split(/\n+/).forEach(line=>{
