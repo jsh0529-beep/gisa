@@ -1481,8 +1481,17 @@ function normalizeBody(text){
 }
 
 function preClean(text){
+  text = text || "";
+  // AI가 데이터 형식으로 감싸 내보낸 이스케이프 문자를 실제 문자로 복원
+  // (\n → 줄바꿈, \" → 따옴표 등. 방치하면 기사 본문에 날것으로 노출됨)
+  text = text
+    .replace(/\\r\\n|\\n|\\r/g, "¶")   // 문자 그대로의 \n 표기 → 줄바꿈 기호
+    .replace(/\\t/g, " ")
+    .replace(/\\"/g, '"')
+    .replace(/\\'/g, "'")
+    .replace(/\\{2}/g, "");               // 남은 이중 백슬래시 제거
   // 본문에 섞여 나온 URL은 제거 (출처 표기는 매체명만 허용)
-  text = (text||"").replace(/\(?\s*https?:\/\/[^\s)¶]+\s*\)?/g, "");
+  text = text.replace(/\(?\s*https?:\/\/[^\s)¶]+\s*\)?/g, "");
   // ¶ 기호가 있으면: 진짜 개행 문자는 전부 인용 경계에서 샌 잡음이므로 공백으로 치환하고,
   // ¶만 줄바꿈으로 변환한다. (¶가 없으면 기존 방식 유지)
   if(text.includes("¶")){
@@ -1599,6 +1608,7 @@ function runQC(mode, lenChoice){
   });
   if(/[—–―]/.test(body)) issues.push("줄표(—) 포함");
   if(/\*\*/.test(body)) issues.push("마크다운(**) 포함");
+  if(/\\n|\\"/.test(body)) issues.push("이스케이프 문자(\\n 등) 잔존");
   let minLen = 0;
   if(mode==='article') minLen = lenChoice==='길게' ? 1800 : lenChoice==='짧게' ? 420 : 850;
   if(mode==='blog') minLen = 1800;
@@ -2006,6 +2016,9 @@ function renderBodyOnly(){
 
 function applyFactFix(it, badgeEl){
   if(!it.find || !it.replace) return false;
+  // 교정 문자열에 이스케이프 표기가 섞여 있으면 정화
+  const sane = s => (s||"").replace(/\\r\\n|\\n|\\r/g, " ").replace(/\\"/g, '"').replace(/\\'/g, "'");
+  it = Object.assign({}, it, {find: sane(it.find), replace: sane(it.replace)});
   let done = false;
   if(articleRaw.includes(it.find)){
     articleRaw = articleRaw.replace(it.find, it.replace);
